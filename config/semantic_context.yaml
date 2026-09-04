@@ -1,0 +1,266 @@
+# UADA Semantic Context Layer (SCL)
+# ==================================
+# Version: 1.0
+# 
+# This file is the semantic foundation of UADA.
+# Edit it to describe YOUR database's business meaning.
+# The Schema Reflector (scripts/onboard_db.py) generates a candidate
+# version of this file from your database schema — you then enrich it.
+#
+# Conventions: Cube-compatible YAML (production migration path: Cube Core).
+# All fields are optional unless marked REQUIRED.
+
+version: "1.0"
+
+# ── Database metadata (REQUIRED) ─────────────────────────────────────────────
+database:
+  name: "acme_analytics"                    # Logical name (shown in UI)
+  description: "Acme Corp operational analytics database"
+  dialect: "postgresql"                     # postgresql | mysql | sqlite | tsql | duckdb
+  timezone: "UTC"                           # Used for time arithmetic
+  fiscal_year_start_month: 4               # 1=January. Here: fiscal Q1 starts April
+
+# ── Tables ───────────────────────────────────────────────────────────────────
+tables:
+
+  - name: "orders"
+    description: "Customer orders. One row per order placed."
+    grain: "order"                          # What one row represents
+    aliases:                               # Alternative names users might say
+      - "transactions"
+      - "sales"
+    excluded: false                        # Set true to hide from all queries
+    columns:
+
+      - name: "order_id"
+        type: "integer"
+        description: "Unique order identifier"
+        semantic_type: "identifier"
+        is_primary_key: true
+
+      - name: "customer_id"
+        type: "integer"
+        description: "Foreign key to the customers table"
+        semantic_type: "identifier"
+        is_foreign_key: true
+        references: "customers.customer_id"
+
+      - name: "order_date"
+        type: "timestamp"
+        description: "Date and time the order was placed (UTC)"
+        semantic_type: "temporal"
+        is_temporal: true
+        default_time_column: true           # Only one column per table
+
+      - name: "revenue"
+        type: "decimal"
+        description: "Net revenue after discounts, before tax (USD)"
+        semantic_type: "measure"
+        aggregation: "SUM"
+
+      - name: "status"
+        type: "varchar"
+        description: "Order lifecycle status"
+        semantic_type: "dimension"
+        enum_values:
+          - "pending"
+          - "confirmed"
+          - "shipped"
+          - "delivered"
+          - "cancelled"
+
+      - name: "region"
+        type: "varchar"
+        description: "Geographic region of the order"
+        semantic_type: "dimension"
+
+  - name: "customers"
+    description: "Customer master table. One row per registered customer."
+    grain: "customer"
+    aliases:
+      - "clients"
+      - "accounts"
+    excluded: false
+    columns:
+
+      - name: "customer_id"
+        type: "integer"
+        description: "Unique customer identifier"
+        semantic_type: "identifier"
+        is_primary_key: true
+
+      - name: "name"
+        type: "varchar"
+        description: "Customer display name"
+        semantic_type: "text"
+
+      - name: "segment"
+        type: "varchar"
+        description: "Customer segment: Enterprise, Mid-Market, SMB"
+        semantic_type: "dimension"
+        enum_values:
+          - "Enterprise"
+          - "Mid-Market"
+          - "SMB"
+
+      - name: "last_order_date"
+        type: "date"
+        description: "Date of the customer's most recent order"
+        semantic_type: "temporal"
+        is_temporal: true
+
+      # EXAMPLE: Excluding a sensitive column
+      - name: "internal_credit_score"
+        type: "integer"
+        description: "Internal credit rating — EXCLUDED from queries"
+        excluded: true
+
+# ── Metrics ───────────────────────────────────────────────────────────────────
+# Named, reusable measures with business logic encapsulated.
+# Reference these names in questions like "show me revenue" or "what is AOV?"
+
+metrics:
+
+  - name: "revenue"
+    description: "Total net revenue across completed orders"
+    formula: "SUM(orders.revenue)"
+    filters: "orders.status != 'cancelled'"  # Applied every time this metric is used
+    unit: "USD"
+    grain: "order"
+    aliases:
+      - "sales"
+      - "earnings"
+
+  - name: "order_count"
+    description: "Number of orders placed"
+    formula: "COUNT(orders.order_id)"
+    filters: "orders.status != 'cancelled'"
+    unit: "orders"
+
+  - name: "aov"
+    description: "Average Order Value — average revenue per order"
+    formula: "AVG(orders.revenue)"
+    filters: "orders.status != 'cancelled'"
+    unit: "USD"
+    aliases:
+      - "average order value"
+      - "average transaction value"
+
+  - name: "customer_count"
+    description: "Number of distinct customers"
+    formula: "COUNT(DISTINCT orders.customer_id)"
+    unit: "customers"
+
+# ── Joins ─────────────────────────────────────────────────────────────────────
+# Defines how tables connect. The Query Planner uses these to build JOIN clauses.
+
+joins:
+
+  - from_table: "orders"
+    to_table: "customers"
+    on: "orders.customer_id = customers.customer_id"
+    join_type: "LEFT"
+    cardinality: "many_to_one"
+    description: "Each order belongs to one customer"
+
+# ── Glossary ──────────────────────────────────────────────────────────────────
+# Business terms → SQL filter translations.
+# Users say "enterprise customers" — UADA knows what that means in SQL.
+
+glossary:
+
+  - term: "enterprise customer"
+    description: "A customer in the Enterprise segment"
+    sql_filter: "customers.segment = 'Enterprise'"
+    applies_to_table: "customers"
+    aliases:
+      - "enterprise clients"
+      - "enterprise accounts"
+      - "enterprise"
+
+  - term: "active customer"
+    description: "A customer with at least one order in the last 90 days"
+    sql_filter: "customers.last_order_date >= CURRENT_DATE - INTERVAL '90 days'"
+    applies_to_table: "customers"
+    aliases:
+      - "active"
+      - "recently active"
+
+  - term: "completed order"
+    description: "An order with status 'delivered'"
+    sql_filter: "orders.status = 'delivered'"
+    applies_to_table: "orders"
+    aliases:
+      - "fulfilled order"
+      - "delivered order"
+
+# ── Example queries ───────────────────────────────────────────────────────────
+# Worked Q&A pairs. Retrieved as few-shot examples during SQL generation.
+# Add more as you discover common user questions.
+
+examples:
+
+  - question: "What was total revenue last quarter?"
+    sql: |
+      SELECT SUM(o.revenue)
+      FROM orders o
+      WHERE o.status != 'cancelled'
+        AND o.order_date >= DATE_TRUNC('quarter', NOW() - INTERVAL '3 months')
+        AND o.order_date < DATE_TRUNC('quarter', NOW())
+    intent_type: "aggregation"
+
+  - question: "Show monthly revenue for the last 12 months"
+    sql: |
+      SELECT
+        DATE_TRUNC('month', o.order_date) AS month,
+        SUM(o.revenue) AS revenue
+      FROM orders o
+      WHERE o.status != 'cancelled'
+        AND o.order_date >= NOW() - INTERVAL '12 months'
+      GROUP BY DATE_TRUNC('month', o.order_date)
+      ORDER BY month
+    intent_type: "time_series"
+
+  - question: "Top 10 customers by revenue"
+    sql: |
+      SELECT
+        c.name,
+        SUM(o.revenue) AS revenue
+      FROM orders o
+      LEFT JOIN customers c ON o.customer_id = c.customer_id
+      WHERE o.status != 'cancelled'
+      GROUP BY c.customer_id, c.name
+      ORDER BY revenue DESC
+      LIMIT 10
+    intent_type: "ranking"
+
+  - question: "Compare revenue this year vs last year"
+    sql: |
+      SELECT
+        EXTRACT(YEAR FROM o.order_date) AS year,
+        SUM(o.revenue) AS revenue
+      FROM orders o
+      WHERE o.status != 'cancelled'
+        AND o.order_date >= DATE_TRUNC('year', NOW() - INTERVAL '1 year')
+      GROUP BY EXTRACT(YEAR FROM o.order_date)
+      ORDER BY year
+    intent_type: "comparison"
+
+# ── Security policy ───────────────────────────────────────────────────────────
+security:
+
+  # Tables that must NEVER appear in generated SQL or prompts
+  excluded_tables:
+    - "audit_log"
+    - "user_sessions"
+    - "api_keys"
+
+  # Specific columns excluded from all queries
+  excluded_columns:
+    - table: "customers"
+      columns:
+        - "internal_credit_score"
+        - "payment_method_token"
+
+  # Row-level filters (future use — not enforced in POC)
+  row_filters: {}

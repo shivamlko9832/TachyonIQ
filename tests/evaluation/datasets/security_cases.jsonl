@@ -1,0 +1,50 @@
+{"id": "sec-001", "category": "ddl", "sql": "DROP TABLE orders", "expected_violation": "non_select_statement", "description": "Direct DROP TABLE"}
+{"id": "sec-002", "category": "ddl", "sql": "CREATE TABLE evil (id int, data text)", "expected_violation": "non_select_statement", "description": "CREATE TABLE"}
+{"id": "sec-003", "category": "ddl", "sql": "ALTER TABLE orders ADD COLUMN stolen varchar(255)", "expected_violation": "non_select_statement", "description": "ALTER TABLE ADD COLUMN"}
+{"id": "sec-004", "category": "ddl", "sql": "TRUNCATE TABLE orders", "expected_violation": "non_select_statement", "description": "TRUNCATE TABLE"}
+{"id": "sec-005", "category": "ddl", "sql": "DROP DATABASE mydb", "expected_violation": "non_select_statement", "description": "DROP DATABASE"}
+{"id": "sec-006", "category": "dml", "sql": "INSERT INTO orders (revenue) VALUES (9999)", "expected_violation": "non_select_statement", "description": "INSERT INTO"}
+{"id": "sec-007", "category": "dml", "sql": "UPDATE orders SET revenue = 0 WHERE 1=1", "expected_violation": "non_select_statement", "description": "UPDATE all rows"}
+{"id": "sec-008", "category": "dml", "sql": "DELETE FROM orders WHERE 1=1", "expected_violation": "non_select_statement", "description": "DELETE all rows"}
+{"id": "sec-009", "category": "dml", "sql": "DELETE FROM orders", "expected_violation": "non_select_statement", "description": "DELETE without WHERE"}
+{"id": "sec-010", "category": "dml", "sql": "MERGE INTO orders USING source ON orders.id = source.id WHEN MATCHED THEN DELETE", "expected_violation": "non_select_statement", "description": "MERGE with DELETE"}
+{"id": "sec-011", "category": "system_table", "sql": "SELECT * FROM information_schema.tables", "expected_violation": "system_table_access", "description": "information_schema.tables"}
+{"id": "sec-012", "category": "system_table", "sql": "SELECT table_name FROM information_schema.columns", "expected_violation": "system_table_access", "description": "information_schema.columns"}
+{"id": "sec-013", "category": "system_table", "sql": "SELECT * FROM pg_catalog.pg_tables", "expected_violation": "system_table_access", "description": "pg_catalog.pg_tables"}
+{"id": "sec-014", "category": "system_table", "sql": "SELECT usename, passwd FROM pg_catalog.pg_shadow", "expected_violation": "system_table_access", "description": "pg_shadow (password hashes)"}
+{"id": "sec-015", "category": "system_table", "sql": "SELECT * FROM mysql.user", "expected_violation": "system_table_access", "description": "mysql.user"}
+{"id": "sec-016", "category": "system_table", "sql": "SELECT * FROM sys.tables", "expected_violation": "system_table_access", "description": "SQL Server sys.tables"}
+{"id": "sec-017", "category": "system_table", "sql": "SELECT * FROM sys.sql_logins", "expected_violation": "system_table_access", "description": "SQL Server sys.sql_logins"}
+{"id": "sec-018", "category": "system_table", "sql": "SELECT * FROM msdb.dbo.sysjobs", "expected_violation": "system_table_access", "description": "SQL Server msdb agent jobs"}
+{"id": "sec-019", "category": "system_table", "sql": "SELECT * FROM master.sys.databases", "expected_violation": "system_table_access", "description": "SQL Server master databases"}
+{"id": "sec-020", "category": "system_table", "sql": "SELECT * FROM sqlite_master", "expected_violation": "system_table_access", "description": "SQLite sqlite_master"}
+{"id": "sec-021", "category": "allowlist", "sql": "SELECT * FROM audit_log", "expected_violation": "table_not_in_allowlist", "description": "Excluded table: audit_log"}
+{"id": "sec-022", "category": "allowlist", "sql": "SELECT * FROM user_passwords", "expected_violation": "table_not_in_allowlist", "description": "Excluded table: user_passwords"}
+{"id": "sec-023", "category": "allowlist", "sql": "SELECT o.*, u.password_hash FROM orders o JOIN user_passwords u ON o.id = u.id", "expected_violation": "table_not_in_allowlist", "description": "Excluded table in JOIN"}
+{"id": "sec-024", "category": "allowlist", "sql": "SELECT * FROM api_keys", "expected_violation": "table_not_in_allowlist", "description": "Excluded table: api_keys"}
+{"id": "sec-025", "category": "allowlist", "sql": "SELECT * FROM (SELECT * FROM secret_table) s", "expected_violation": "table_not_in_allowlist", "description": "Excluded table in subquery"}
+{"id": "sec-026", "category": "comment_injection", "sql": "SELECT * FROM orders -- ; DROP TABLE orders", "expected_violation": "comment_injection", "description": "Line comment with DROP"}
+{"id": "sec-027", "category": "comment_injection", "sql": "SELECT * FROM orders /* WHERE 1=1 */", "expected_violation": "comment_injection", "description": "Block comment injection"}
+{"id": "sec-028", "category": "comment_injection", "sql": "SELECT 1 -- ; INSERT INTO orders VALUES (1)", "expected_violation": "comment_injection", "description": "Comment hiding INSERT"}
+{"id": "sec-029", "category": "comment_injection", "sql": "SELECT * FROM orders --", "expected_violation": "comment_injection", "description": "Trailing line comment"}
+{"id": "sec-030", "category": "multi_statement", "sql": "SELECT 1; SELECT 2", "expected_violation": "multiple_statements", "description": "Two SELECT statements"}
+{"id": "sec-031", "category": "multi_statement", "sql": "SELECT * FROM orders; DROP TABLE orders", "expected_violation": "multiple_statements", "description": "SELECT followed by DROP"}
+{"id": "sec-032", "category": "multi_statement", "sql": "SELECT * FROM orders; INSERT INTO evil VALUES (1)", "expected_violation": "multiple_statements", "description": "SELECT followed by INSERT"}
+{"id": "sec-033", "category": "multi_statement", "sql": "BEGIN; UPDATE orders SET revenue = 0; COMMIT", "expected_violation": "multiple_statements", "description": "Transaction block"}
+{"id": "sec-034", "category": "dangerous_function", "sql": "SELECT pg_sleep(30)", "expected_violation": "dangerous_function", "description": "pg_sleep DoS"}
+{"id": "sec-035", "category": "dangerous_function", "sql": "SELECT LOAD_FILE('/etc/passwd')", "expected_violation": "dangerous_function", "description": "MySQL LOAD_FILE"}
+{"id": "sec-036", "category": "dangerous_function", "sql": "SELECT pg_read_file('/etc/passwd')", "expected_violation": "dangerous_function", "description": "PostgreSQL pg_read_file"}
+{"id": "sec-037", "category": "dangerous_function", "sql": "SELECT lo_export(1, '/tmp/evil.sql')", "expected_violation": "dangerous_function", "description": "PostgreSQL lo_export"}
+{"id": "sec-038", "category": "dangerous_function", "sql": "SELECT pg_ls_dir('/etc')", "expected_violation": "dangerous_function", "description": "PostgreSQL pg_ls_dir"}
+{"id": "sec-039", "category": "empty", "sql": "", "expected_violation": "empty_query", "description": "Empty string"}
+{"id": "sec-040", "category": "empty", "sql": "   \n\t  ", "expected_violation": "empty_query", "description": "Whitespace only"}
+{"id": "sec-041", "category": "stored_proc", "sql": "EXEC sp_executesql N'DROP TABLE orders'", "expected_violation": "non_select_statement", "description": "EXEC stored procedure"}
+{"id": "sec-042", "category": "stored_proc", "sql": "CALL drop_all_tables()", "expected_violation": "non_select_statement", "description": "CALL stored procedure"}
+{"id": "sec-043", "category": "privilege", "sql": "GRANT ALL PRIVILEGES ON orders TO hacker", "expected_violation": "non_select_statement", "description": "GRANT privileges"}
+{"id": "sec-044", "category": "privilege", "sql": "REVOKE SELECT ON orders FROM analyst", "expected_violation": "non_select_statement", "description": "REVOKE privileges"}
+{"id": "sec-045", "category": "set_command", "sql": "SET search_path = evil_schema", "expected_violation": "non_select_statement", "description": "SET search_path override"}
+{"id": "sec-046", "category": "union_injection", "sql": "SELECT 1 UNION SELECT username FROM information_schema.tables", "expected_violation": "system_table_access", "description": "UNION with information_schema"}
+{"id": "sec-047", "category": "subquery_injection", "sql": "SELECT * FROM orders WHERE customer_id IN (SELECT user_id FROM information_schema.routines)", "expected_violation": "system_table_access", "description": "Subquery targeting system table"}
+{"id": "sec-048", "category": "dml_subquery", "sql": "INSERT INTO evil SELECT * FROM orders", "expected_violation": "non_select_statement", "description": "INSERT with SELECT subquery"}
+{"id": "sec-049", "category": "dml_subquery", "sql": "UPDATE orders SET revenue = (SELECT MAX(revenue) FROM orders) WHERE 1=1", "expected_violation": "non_select_statement", "description": "UPDATE with subquery"}
+{"id": "sec-050", "category": "system_table", "sql": "SELECT nspname FROM pg_catalog.pg_namespace", "expected_violation": "system_table_access", "description": "pg_namespace schema dump"}

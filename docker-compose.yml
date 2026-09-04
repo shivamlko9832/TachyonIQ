@@ -1,0 +1,105 @@
+version: "3.9"
+
+# UADA — Local POC Deployment
+# ============================
+# Starts all services needed for a fully local, zero-cloud POC.
+#
+# Usage:
+#   cp .env.example .env          # Edit with your database URL
+#   docker-compose up             # Start all services
+#   docker-compose up uada-api   # Start only the API (if Ollama/Langfuse already running)
+#
+# Services:
+#   uada-api     — FastAPI application (port 8000)
+#   ollama       — Local LLM serving (port 11434)
+#   langfuse-web — Langfuse observability UI (port 3000)
+#   langfuse-db  — Langfuse PostgreSQL backend
+#
+# The client database is NOT included here — UADA connects to your existing database
+# via UADA_DB_URL in .env.
+
+networks:
+  uada-net:
+    driver: bridge
+
+volumes:
+  chroma-data:
+  ollama-data:
+  langfuse-db-data:
+
+services:
+
+  # ── UADA API ──────────────────────────────────────────────────────────────
+  uada-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: uada-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      UADA_VECTOR_BACKEND: chroma
+      UADA_CHROMA_PATH: /data/chroma
+      UADA_SCL_PATH: /app/config/semantic_context.yaml
+      UADA_LANGFUSE_HOST: http://langfuse-web:3000
+      UADA_LLM_MODEL: ollama:qwen2.5-coder:7b
+    volumes:
+      - chroma-data:/data/chroma
+      - ./config:/app/config:ro
+    depends_on:
+      - ollama
+      - langfuse-web
+    networks:
+      - uada-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Ollama (local LLM) ────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: uada-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - uada-net
+    restart: unless-stopped
+    # Pull the model on first start.
+    # entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 10 && ollama pull qwen2.5-coder:7b && wait"]
+
+  # ── Langfuse (observability) ───────────────────────────────────────────────
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: uada-langfuse-db
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_password
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    networks:
+      - uada-net
+    restart: unless-stopped
+
+  langfuse-web:
+    image: langfuse/langfuse:latest
+    container_name: uada-langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_password@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: change-this-in-production
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: change-this-in-production
+    depends_on:
+      - langfuse-db
+    networks:
+      - uada-net
+    restart: unless-stopped
