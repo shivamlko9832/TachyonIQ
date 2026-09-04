@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     """Construct every pipeline dependency from `settings` for a real deployment."""
     from uada.db.adapter import SQLAlchemyAdapter
+    from uada.observability.tracer import configure_tracing
     from uada.pipeline.conversation_store import ConversationStore
     from uada.pipeline.intent_extractor import IntentExtractor
     from uada.pipeline.orchestrator import PipelineOrchestrator
@@ -49,6 +50,11 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     from uada.retrieval.hybrid import HybridRetriever
     from uada.scl.loader import SCLLoader
     from uada.scl.manager import SCLManager
+
+    # Only for real deployments -- tests build their own orchestrator and
+    # never call this function, so tracing setup never runs against the
+    # TestModel-overridden agents a test wires up.
+    configure_tracing(settings)
 
     scl = SCLLoader.load(settings.scl_path)
     scl_manager = SCLManager(scl)
@@ -120,6 +126,15 @@ def create_app(
 
     app = FastAPI(title="UADA", version="0.1.0", lifespan=lifespan)
     app.add_middleware(AuthMiddleware, settings=settings)
+
+    if orchestrator is None:
+        # Real deployment only: instrumenting every test-created app would
+        # repeatedly instrument the same underlying ASGI machinery across
+        # the test suite for no benefit, since tests never export traces.
+        from uada.observability.tracer import instrument_app
+
+        instrument_app(app)
+
     app.include_router(health.router)
     app.include_router(query.router)
     app.include_router(session.router)

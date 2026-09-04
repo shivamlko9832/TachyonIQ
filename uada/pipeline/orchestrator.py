@@ -23,6 +23,8 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from opentelemetry import trace
+
 from uada.db.interface import QueryExecutionError, QueryTimeoutError
 from uada.models.conversation import ActiveContext, ConversationTurn, TurnStatus
 from uada.models.intent import QuestionType
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
     from uada.scl.manager import SCLManager
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 _ERROR_TYPE_TO_TURN_STATUS: dict[str, TurnStatus] = {
     "security_violation": TurnStatus.SECURITY_REJECTED,
@@ -100,11 +103,20 @@ class PipelineOrchestrator:
         intent: AnalyticalIntent | None = None
 
         try:
-            context_str = state.get_edition_context()
-            schema_ctx = self._schema_linker.link(question, context_str)
+            with _tracer.start_as_current_span("schema_linking") as span:
+                context_str = state.get_edition_context()
+                schema_ctx = self._schema_linker.link(question, context_str)
+                span.set_attribute("query", question)
+                span.set_attribute(
+                    "tables_retrieved", [t.table_name for t in schema_ctx.tables]
+                )
 
             stage = PipelineStage.INTENT_EXTRACTION
-            intent = await self._intent_extractor.extract(question, schema_ctx, context_str)
+            with _tracer.start_as_current_span("intent_extraction") as span:
+                intent = await self._intent_extractor.extract(question, schema_ctx, context_str)
+                span.set_attribute("question_type", intent.question_type.value)
+                span.set_attribute("confidence", intent.confidence)
+                span.set_attribute("measures", list(intent.measures))
 
             if intent.question_type in (QuestionType.OUT_OF_SCOPE, QuestionType.AMBIGUOUS):
                 response = self._scope_error_response(intent, session_id, turn_id, start_time)
@@ -112,10 +124,16 @@ class PipelineOrchestrator:
                 return await self._save_and_return(state, turn, None, response)
 
             stage = PipelineStage.QUERY_PLANNING
-            plan = self._query_planner.plan(intent, schema_ctx)
+            with _tracer.start_as_current_span("query_planning") as span:
+                plan = self._query_planner.plan(intent, schema_ctx)
+                span.set_attribute("dialect", plan.dialect.value)
+                span.set_attribute("table_count", 1 + len(plan.additional_tables))
+                span.set_attribute("join_count", len(plan.joins))
 
             stage = PipelineStage.SQL_GENERATION
-            sql = await self._sql_generator.generate(plan)
+            with _tracer.start_as_current_span("sql_generation") as span:
+                span.set_attribute("attempt_number", 1)
+                sql = await self._sql_generator.generate(plan)
 
             stage = PipelineStage.SQL_VALIDATION
             outcome = await self._validate_and_execute(
@@ -128,10 +146,17 @@ class PipelineOrchestrator:
 
             stage = PipelineStage.RESULT_ANALYSIS
             query_result = self._to_query_result(raw_result, normalised_sql, plan)
-            analysed = self._result_analyser.analyse(query_result, intent)
+            with _tracer.start_as_current_span("result_analysis") as span:
+                analysed = self._result_analyser.analyse(query_result, intent)
+                span.set_attribute("has_time_dimension", analysed.has_time_dimension)
+                span.set_attribute("outlier_count", len(analysed.outliers))
 
             stage = PipelineStage.VISUALISATION
-            viz = await self._viz_generator.generate(analysed, intent)
+            with _tracer.start_as_current_span("viz_generation") as span:
+                viz = await self._viz_generator.generate(analysed, intent)
+                span.set_attribute(
+                    "chart_type", viz.chart_type.value if hasattr(viz, "chart_type") else "none"
+                )
 
             tables_used = [plan.primary_table.table_name] + [
                 t.table_name for t in plan.additional_tables
@@ -217,22 +242,31 @@ class PipelineOrchestrator:
         retries = 0
         current_sql = sql
         while True:
-            validation = self._validator.validate(current_sql, dialect=plan.dialect.value)
-            if not validation.is_safe:
-                self._log_security_incident(plan, validation)
-                return self._terminal_response(
-                    session_id, turn_id, start_time, PipelineStage.SQL_VALIDATION,
-                    "security_violation", self._violation_message(validation),
-                    self._violation_user_message(validation), is_retryable=False,
-                )
+            with _tracer.start_as_current_span("sql_validation") as span:
+                validation = self._validator.validate(current_sql, dialect=plan.dialect.value)
+                span.set_attribute("is_safe", validation.is_safe)
+                if not validation.is_safe:
+                    violation = validation.first_violation
+                    if violation is not None:
+                        span.set_attribute("violation_type", violation.violation_type.value)
+                    self._log_security_incident(plan, validation)
+                    return self._terminal_response(
+                        session_id, turn_id, start_time, PipelineStage.SQL_VALIDATION,
+                        "security_violation", self._violation_message(validation),
+                        self._violation_user_message(validation), is_retryable=False,
+                    )
 
             normalised_sql = validation.normalised_sql or current_sql
             try:
-                raw_result = self._db_adapter.execute_query(
-                    normalised_sql,
-                    timeout_seconds=self._settings.db_query_timeout_seconds,
-                    max_rows=self._settings.db_max_rows,
-                )
+                with _tracer.start_as_current_span("query_execution") as span:
+                    raw_result = self._db_adapter.execute_query(
+                        normalised_sql,
+                        timeout_seconds=self._settings.db_query_timeout_seconds,
+                        max_rows=self._settings.db_max_rows,
+                    )
+                    span.set_attribute("row_count", raw_result.row_count)
+                    span.set_attribute("execution_time_ms", raw_result.execution_time_ms)
+                    span.set_attribute("is_truncated", raw_result.is_truncated)
                 return normalised_sql, raw_result
             except QueryTimeoutError as exc:
                 return self._terminal_response(
@@ -252,7 +286,9 @@ class PipelineOrchestrator:
                         is_retryable=True,
                     )
                 logger.info("SQL execution failed; requesting repair (attempt %d).", retries)
-                current_sql = await self._sql_generator.repair(normalised_sql, exc, plan)
+                with _tracer.start_as_current_span("sql_generation") as span:
+                    span.set_attribute("attempt_number", retries + 1)
+                    current_sql = await self._sql_generator.repair(normalised_sql, exc, plan)
 
     def _log_security_incident(self, plan: QueryPlan, validation: ValidationResult) -> None:
         # Never log SQL text or values -- violation types/details only.
