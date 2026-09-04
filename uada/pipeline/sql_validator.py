@@ -106,7 +106,7 @@ FORBIDDEN_STATEMENT_TYPES: tuple[type[exp.Expression], ...] = (
     exp.Create,
     exp.Drop,
     exp.Alter,
-    exp.Truncate,
+    exp.TruncateTable,
     exp.Command,     # EXEC, CALL, etc.
     exp.Transaction,
     exp.Commit,
@@ -394,10 +394,24 @@ class SQLValidator:
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _extract_tables(self, statement: exp.Expression) -> set[str]:
-        """Extract all table names referenced in the statement."""
+        """Extract all physical table names referenced in the statement.
+
+        CTE names (defined by a WITH clause) are excluded: SQLGlot represents
+        a CTE reference as an ordinary ``exp.Table`` node, but it is a
+        query-local alias, not a real table subject to the allowlist.
+        """
+        cte_names: set[str] = set()
+        for with_node in statement.find_all(exp.With):
+            for cte in with_node.expressions:
+                alias = cte.alias
+                if alias:
+                    cte_names.add(alias.lower())
+
         tables: set[str] = set()
         for table_node in statement.find_all(exp.Table):
             name = table_node.name
+            if name and name.lower() in cte_names:
+                continue
             db = table_node.args.get("db")
             schema = table_node.args.get("catalog")
             parts = [p for p in [schema, db, name] if p]
@@ -405,12 +419,22 @@ class SQLValidator:
         return tables
 
     def _measure_subquery_depth(self, node: exp.Expression, current_depth: int = 0) -> int:
-        """Recursively measure maximum subquery nesting depth."""
+        """Recursively measure maximum subquery nesting depth.
+
+        Only direct children are traversed (via ``iter_expressions``), and
+        depth increments once per ``exp.Subquery`` boundary. SQLGlot wraps
+        every nested SELECT (in FROM, IN, EXISTS, scalar position, etc.) in
+        a Subquery node around the inner Select, so counting Subquery alone
+        — rather than Subquery and Select separately — avoids double-counting
+        each physical nesting level. A full-tree walk (``.walk()``) would also
+        re-visit already-nested descendants from every ancestor, inflating
+        the depth further; iterating direct children avoids that too.
+        """
         max_depth = current_depth
-        for child in node.walk():
-            if child is node:
-                continue
-            if isinstance(child, (exp.Subquery, exp.Select)) and child is not node:
+        for child in node.iter_expressions():
+            if isinstance(child, exp.Subquery):
                 depth = self._measure_subquery_depth(child, current_depth + 1)
-                max_depth = max(max_depth, depth)
+            else:
+                depth = self._measure_subquery_depth(child, current_depth)
+            max_depth = max(max_depth, depth)
         return max_depth
