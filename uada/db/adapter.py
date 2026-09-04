@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import StaticPool
 
 from uada.db.interface import (
     ConnectionError,
@@ -50,6 +51,13 @@ _DIALECT_MAP: dict[str, str] = {
     "sqlite": "sqlite",
     "mssql": "tsql",
 }
+
+def _is_sqlite_memory_url(connection_string: str) -> bool:
+    """Whether `connection_string` is a non-persistent (in-memory) SQLite URL."""
+    return connection_string in ("sqlite://", "sqlite:///:memory:") or (
+        ":memory:" in connection_string
+    )
+
 
 # Python value type -> UADA type label, used both for ad-hoc query results
 # and (via TypeEngine.python_type) for reflected column types.
@@ -80,6 +88,14 @@ class SQLAlchemyAdapter(DatabaseAdapter):
         SQLite's default pool classes (SingletonThreadPool / NullPool) do
         not accept `pool_size`/`pool_recycle`, and its DBAPI has no
         `connect_timeout` parameter, so both are skipped for that dialect.
+
+        An in-memory SQLite URL additionally needs `StaticPool` +
+        `check_same_thread=False`: SQLAlchemy's default pool for
+        `sqlite:///:memory:` (SingletonThreadPool) hands each *thread* its
+        own separate in-memory database, invisible to every other thread
+        -- including a concurrent request handled on a different thread
+        by a real ASGI server. StaticPool shares one single connection
+        across every thread instead.
         """
         self._settings = settings
         engine_kwargs: dict[str, Any] = {}
@@ -89,6 +105,9 @@ class SQLAlchemyAdapter(DatabaseAdapter):
             engine_kwargs["pool_size"] = settings.db_pool_size
             engine_kwargs["pool_recycle"] = settings.db_pool_recycle_seconds
             connect_args["connect_timeout"] = 10
+        elif _is_sqlite_memory_url(connection_string):
+            engine_kwargs["poolclass"] = StaticPool
+            connect_args["check_same_thread"] = False
 
         try:
             self._engine: Engine = create_engine(

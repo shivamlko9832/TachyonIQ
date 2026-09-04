@@ -81,6 +81,16 @@ class PipelineOrchestrator:
         self._validator = validator
         self._settings = settings
 
+    @property
+    def db_adapter(self) -> DatabaseAdapter:
+        """The underlying database adapter. Exposed for health checks."""
+        return self._db_adapter
+
+    @property
+    def conversation_store(self) -> ConversationStore:
+        """The conversation session store. Exposed for session management endpoints."""
+        return self._conversation_store
+
     async def run(self, question: str, session_id: str) -> UADAResponse:
         """Run the full pipeline for `question` and return a UADAResponse."""
         start_time = time.perf_counter()
