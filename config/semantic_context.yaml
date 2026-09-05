@@ -115,6 +115,38 @@ tables:
         description: "Internal credit rating — EXCLUDED from queries"
         excluded: true
 
+  - name: "products"
+    description: "Product catalogue. One row per sellable product."
+    grain: "product"
+    aliases:
+      - "items"
+      - "goods"
+      - "product catalogue"
+    excluded: false
+    columns:
+
+      - name: "id"
+        type: "integer"
+        description: "Unique product identifier"
+        semantic_type: "identifier"
+        is_primary_key: true
+
+      - name: "name"
+        type: "varchar"
+        description: "Product display name"
+        semantic_type: "text"
+
+      - name: "category"
+        type: "varchar"
+        description: "Product category (e.g. Electronics, Clothing)"
+        semantic_type: "dimension"
+
+      - name: "unit_price"
+        type: "decimal"
+        description: "List price per unit (USD)"
+        semantic_type: "measure"
+        aggregation: "AVG"
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 # Named, reusable measures with business logic encapsulated.
 # Reference these names in questions like "show me revenue" or "what is AOV?"
@@ -162,6 +194,13 @@ joins:
     join_type: "LEFT"
     cardinality: "many_to_one"
     description: "Each order belongs to one customer"
+
+  - from_table: "orders"
+    to_table: "products"
+    on: "orders.product_id = products.id"
+    join_type: "LEFT"
+    cardinality: "many_to_one"
+    description: "Each order is for one product"
 
 # ── Glossary ──────────────────────────────────────────────────────────────────
 # Business terms → SQL filter translations.

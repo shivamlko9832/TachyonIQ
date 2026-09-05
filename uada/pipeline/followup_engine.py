@@ -91,12 +91,12 @@ class FollowUpEngine:
 
         # Available dimensions from schema (excluding those already in intent)
         available_dims = [
-            col.name.replace("_", " ")
+            col.column_name.replace("_", " ")
             for tbl in schema_context.tables
             for col in tbl.columns
-            if col.name not in dimensions
+            if col.column_name not in dimensions
             and col.semantic_type in ("dimension", "DIMENSION", None)
-            and col.name not in ("id", "created_at", "updated_at")
+            and col.column_name not in ("id", "created_at", "updated_at")
         ][:3]
 
         suggestions: list[str] = []
