@@ -77,6 +77,7 @@ class PipelineOrchestrator:
         settings: Settings,
         followup_engine: FollowUpEngine | None = None,
         audit_logger: AuditLogger | None = None,
+        insight_generator: object | None = None,
     ) -> None:
         self._db_adapter = db_adapter
         self._scl_manager = scl_manager
@@ -91,6 +92,7 @@ class PipelineOrchestrator:
         self._settings = settings
         self._followup_engine = followup_engine
         self._audit_logger = audit_logger
+        self._insight_generator = insight_generator  # P4-A-3: optional LLM insight step
 
     @property
     def db_adapter(self) -> DatabaseAdapter:
@@ -217,6 +219,42 @@ class PipelineOrchestrator:
                 except Exception as _fe_exc:  # noqa: BLE001
                     logger.warning("FollowUpEngine failed: %s", _fe_exc)
 
+            # P4-A-1: Data Quality Check (deterministic, best-effort)
+            _data_quality = None
+            try:
+                import pandas as _pd
+                from uada.analytics.data_quality import DataQualityChecker
+                _dq_df = _pd.DataFrame(query_result.rows, columns=query_result.column_names)
+                _data_quality = DataQualityChecker().check(_dq_df)
+            except Exception as _dq_exc:  # noqa: BLE001
+                logger.debug("DataQualityChecker skipped: %s", _dq_exc)
+
+            # P4-A-2: Explainability Context (deterministic, best-effort)
+            _explainability = None
+            try:
+                from uada.analytics.explainability import ExplainabilityBuilder
+                _explainability = ExplainabilityBuilder().build(
+                    sql=normalised_sql,
+                    analysed_result=analysed,
+                    viz=viz,
+                    is_truncated=query_result.is_truncated,
+                    truncated_at=query_result.truncated_at,
+                )
+            except Exception as _ex_exc:  # noqa: BLE001
+                logger.debug("ExplainabilityBuilder skipped: %s", _ex_exc)
+
+            # P4-A-3: LLM Insight Generator (best-effort, non-blocking)
+            _generated_insights = None
+            if self._insight_generator is not None:
+                try:
+                    _generated_insights = await self._insight_generator.generate(
+                        question=question,
+                        analysed_result=analysed,
+                        data_quality=_data_quality,
+                    )
+                except Exception as _ig_exc:  # noqa: BLE001
+                    logger.warning("InsightGenerator skipped: %s", _ig_exc)
+
             response = UADAResponse(
                 session_id=session_id,
                 turn_id=turn_id,
@@ -239,6 +277,9 @@ class PipelineOrchestrator:
                 correlation_result=analysed.correlation_result,
                 anomaly_result=analysed.anomaly_result,
                 forecast_result=analysed.forecast_result,
+                data_quality=_data_quality,
+                explainability=_explainability,
+                generated_insights=_generated_insights,
             )
             turn = ConversationTurn(
                 turn_id=turn_id,
@@ -677,6 +718,42 @@ class PipelineOrchestrator:
                 except Exception as _fe_exc:  # noqa: BLE001
                     logger.warning("FollowUpEngine failed (stream): %s", _fe_exc)
 
+            # P4-A-1: Data Quality Check (deterministic, best-effort)
+            _data_quality = None
+            try:
+                import pandas as _pd
+                from uada.analytics.data_quality import DataQualityChecker
+                _dq_df = _pd.DataFrame(query_result.rows, columns=query_result.column_names)
+                _data_quality = DataQualityChecker().check(_dq_df)
+            except Exception as _dq_exc:  # noqa: BLE001
+                logger.debug("DataQualityChecker skipped (stream): %s", _dq_exc)
+
+            # P4-A-2: Explainability Context (deterministic, best-effort)
+            _explainability = None
+            try:
+                from uada.analytics.explainability import ExplainabilityBuilder
+                _explainability = ExplainabilityBuilder().build(
+                    sql=normalised_sql,
+                    analysed_result=analysed,
+                    viz=viz,
+                    is_truncated=query_result.is_truncated,
+                    truncated_at=query_result.truncated_at,
+                )
+            except Exception as _ex_exc:  # noqa: BLE001
+                logger.debug("ExplainabilityBuilder skipped (stream): %s", _ex_exc)
+
+            # P4-A-3: LLM Insight Generator (best-effort, non-blocking)
+            _generated_insights = None
+            if self._insight_generator is not None:
+                try:
+                    _generated_insights = await self._insight_generator.generate(
+                        question=question,
+                        analysed_result=analysed,
+                        data_quality=_data_quality,
+                    )
+                except Exception as _ig_exc:  # noqa: BLE001
+                    logger.warning("InsightGenerator skipped (stream): %s", _ig_exc)
+
             response = UADAResponse(
                 session_id=session_id,
                 turn_id=turn_id,
@@ -699,6 +776,9 @@ class PipelineOrchestrator:
                 correlation_result=analysed.correlation_result,
                 anomaly_result=analysed.anomaly_result,
                 forecast_result=analysed.forecast_result,
+                data_quality=_data_quality,
+                explainability=_explainability,
+                generated_insights=_generated_insights,
             )
             turn = ConversationTurn(
                 turn_id=turn_id,

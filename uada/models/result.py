@@ -365,6 +365,81 @@ class ForecastResult(BaseModel):
     skip_reason: str | None = None
 
 
+
+# ── P4-A Analytics Models ─────────────────────────────────────────────────────
+
+
+class ColumnQualityIssue(BaseModel):
+    """A single data-quality issue detected in a column (P4-A-1)."""
+
+    column: str
+    issue_type: str = Field(
+        description=(
+            "'all_nulls' | 'high_nulls' | 'type_mismatch' | "
+            "'empty_strings' | 'duplicate_rows'"
+        )
+    )
+    severity: str = Field(description="'high' | 'medium' | 'low'")
+    detail: str = Field(description="Human-readable description of the issue.")
+
+
+class DataQualityReport(BaseModel):
+    """
+    Data-quality assessment for a query result (P4-A-1, GAP-15).
+    Produced by DataQualityChecker; stored on UADAResponse.
+    """
+
+    null_rates: dict[str, float] = Field(
+        default_factory=dict,
+        description="Null rate per column (0.0–1.0).",
+    )
+    duplicate_row_count: int = 0
+    duplicate_row_pct: float = 0.0
+    empty_string_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Number of empty/blank string values per object column.",
+    )
+    issues: list[ColumnQualityIssue] = Field(default_factory=list)
+    overall_quality_score: float = Field(
+        default=100.0,
+        description="0–100 quality score. 100 = no issues detected.",
+    )
+    summary: str = ""
+    skipped: bool = False
+    skip_reason: str | None = None
+
+
+class ExplainabilityContext(BaseModel):
+    """
+    Deterministic explainability layer (P4-A-2, GAP-18).
+    Built from the executed SQL and AnalysedResult — no LLM involved.
+    """
+
+    sql_breakdown: str = Field(
+        description="One-line summary of tables, aggregations, filters.",
+    )
+    tables_referenced: list[str] = Field(default_factory=list)
+    filters_applied: list[str] = Field(
+        default_factory=list,
+        description="WHERE / HAVING conditions extracted from the SQL.",
+    )
+    aggregations: list[str] = Field(
+        default_factory=list,
+        description="Aggregate functions detected (SUM, COUNT, AVG, …).",
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Implicit assumptions: NULL handling, truncation, date filters.",
+    )
+    chart_rationale: str | None = Field(
+        default=None,
+        description="Why this chart type was selected for the result shape.",
+    )
+    calculation_steps: list[str] = Field(
+        default_factory=list,
+        description="Step-by-step plain-English derivation of the result.",
+    )
+
 # ── Final Response ─────────────────────────────────────────────────────────────
 
 
@@ -399,6 +474,35 @@ class UADAError(BaseModel):
         description="If set, the user should answer this question before retrying.",
     )
 
+
+
+
+class GeneratedInsights(BaseModel):
+    """
+    LLM-generated insight layer (P4-A-3, GAP-14).
+    Produced by InsightGenerator; stored on UADAResponse.
+    """
+
+    key_findings: list[str] = Field(
+        default_factory=list,
+        description="3-5 insight bullets grounded in the statistical context.",
+    )
+    drivers: list[str] = Field(
+        default_factory=list,
+        description="2-3 hypothesised business/operational drivers.",
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="2-3 actionable follow-up suggestions.",
+    )
+    data_quality_notes: list[str] = Field(
+        default_factory=list,
+        description="Caveats from the data quality report. Empty if none.",
+    )
+    confidence: str = Field(
+        default="medium",
+        description="'high' | 'medium' | 'low' — analyst confidence in the insights.",
+    )
 
 class UADAResponse(BaseModel):
     """
@@ -446,6 +550,11 @@ class UADAResponse(BaseModel):
     correlation_result: "CorrelationResult | None" = None
     anomaly_result: "AnomalyResult | None" = None
     forecast_result: "ForecastResult | None" = None
+
+    # ── P4-A Insights Depth ───────────────────────────────────────────────────
+    data_quality: "DataQualityReport | None" = None
+    explainability: "ExplainabilityContext | None" = None
+    generated_insights: GeneratedInsights | None = None
 
     # ── Error path ────────────────────────────────────────────────────────────
     error: UADAError | None = None
