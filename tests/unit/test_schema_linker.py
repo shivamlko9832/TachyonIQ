@@ -150,3 +150,64 @@ class TestDefaultTimeColumn:
         customers_ctx = linker._build_table_context("customers", 1.0)
         assert customers_ctx is not None
         assert linker._default_time_column([customers_ctx]) is None
+
+
+class TestTableRetrievalNotCrowdedOutByExamples:
+    """
+    Regression test for a real bug found while onboarding a demo database:
+    link() used to retrieve one shared top_k across every doc_type, so a
+    schema with several worked examples whose "Question: ..." text closely
+    matches the real question could out-rank -- and entirely crowd out --
+    the actual table doc. Confirmed empirically: with 8 examples in a
+    3-table demo schema, a plain revenue question didn't surface the
+    'orders' table even in the top 10 combined results. Each doc_type now
+    gets its own retrieval budget.
+    """
+
+    def test_table_survives_many_lexically_similar_examples(
+        self, tmp_path: Path, embedder: Embedder
+    ) -> None:
+        from uada.scl.schema import (
+            ColumnDefinition,
+            DatabaseMeta,
+            ExampleQuery,
+            MetricDefinition,
+            SecurityPolicy,
+            SemanticContextLayer,
+            TableDefinition,
+        )
+
+        question = "What was total revenue last quarter?"
+        scl = SemanticContextLayer(
+            version="1.0",
+            database=DatabaseMeta(name="crowd_test", dialect="sqlite"),
+            tables=[
+                TableDefinition(
+                    name="orders",
+                    description="Orders.",
+                    columns=[ColumnDefinition(name="revenue", type="float")],
+                )
+            ],
+            metrics=[
+                MetricDefinition(
+                    name="revenue", description="Total revenue.", formula="SUM(orders.revenue)"
+                )
+            ],
+            examples=[
+                ExampleQuery(question=question, sql="SELECT SUM(orders.revenue) FROM orders")
+                for _ in range(10)
+            ],
+            security=SecurityPolicy(),
+        )
+        manager = SCLManager(scl)
+        backend = ChromaBackend(
+            path=str(tmp_path / "chroma_crowd"), collection_name="crowd_test", embedder=embedder
+        )
+        retriever = HybridRetriever(vector_backend=backend, bm25_index=BM25Index())
+        retriever.build_index(manager.to_indexable_documents())
+        settings = Settings(db_url="sqlite:///:memory:")  # type: ignore[call-arg]
+        linker = SchemaLinker(retriever, manager, settings)
+
+        context = linker.link(question)
+
+        assert "orders" in {t.table_name for t in context.tables}

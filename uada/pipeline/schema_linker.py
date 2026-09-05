@@ -64,38 +64,66 @@ class SchemaLinker:
             schema elements.
         """
         query = self._build_query(question, session_context)
-        results = self._retriever.retrieve(query, top_k=self._settings.retrieval_final_k)
+        top_k = self._settings.retrieval_final_k
+
+        # Retrieved separately per doc_type, each with its own top_k budget
+        # -- not one shared budget across all types. A worked example's
+        # content ("Question: What was total revenue last quarter?") is
+        # often a near-exact match for the question itself and will
+        # systematically outrank a table's one-line description under a
+        # combined ranking, starving tables out of the result entirely
+        # once a schema has more than a couple of examples or metrics.
+        # Confirmed empirically against a real demo schema (3 tables, 4
+        # metrics, 8 examples): the "orders" table didn't appear even in
+        # the top 10 combined results for a plain revenue question.
+        table_results = self._retriever.retrieve(
+            query, top_k=top_k, filters={"doc_type": DocType.TABLE}
+        )
+        metric_results = self._retriever.retrieve(
+            query, top_k=top_k, filters={"doc_type": DocType.METRIC}
+        )
+        glossary_results = self._retriever.retrieve(
+            query, top_k=top_k, filters={"doc_type": DocType.GLOSSARY}
+        )
+        example_results = self._retriever.retrieve(
+            query, top_k=top_k, filters={"doc_type": DocType.EXAMPLE}
+        )
 
         tables: list[TableContext] = []
-        metrics: list[MetricContext] = []
-        glossary_terms: list[GlossaryContext] = []
-        examples: list[ExampleContext] = []
         seen_tables: set[str] = set()
-
-        for result in results:
-            doc_type = result.document.metadata.get("doc_type")
+        for result in table_results:
             _, _, identifier = result.document.doc_id.partition(":")
+            if identifier in seen_tables:
+                continue
+            table_ctx = self._build_table_context(identifier, result.score)
+            if table_ctx is not None:
+                seen_tables.add(identifier)
+                tables.append(table_ctx)
 
-            if doc_type == DocType.TABLE:
-                if identifier in seen_tables:
-                    continue
-                table_ctx = self._build_table_context(identifier, result.score)
-                if table_ctx is not None:
-                    seen_tables.add(identifier)
-                    tables.append(table_ctx)
-            elif doc_type == DocType.METRIC:
-                metric_ctx = self._build_metric_context(identifier, result.score)
-                if metric_ctx is not None:
-                    metrics.append(metric_ctx)
-            elif doc_type == DocType.GLOSSARY:
-                glossary_ctx = self._build_glossary_context(identifier)
-                if glossary_ctx is not None:
-                    glossary_terms.append(glossary_ctx)
-            elif doc_type == DocType.EXAMPLE:
-                example_ctx = self._build_example_context(identifier, result.score)
-                if example_ctx is not None:
-                    examples.append(example_ctx)
+        metrics: list[MetricContext] = []
+        for result in metric_results:
+            _, _, identifier = result.document.doc_id.partition(":")
+            metric_ctx = self._build_metric_context(identifier, result.score)
+            if metric_ctx is not None:
+                metrics.append(metric_ctx)
 
+        glossary_terms: list[GlossaryContext] = []
+        for result in glossary_results:
+            _, _, identifier = result.document.doc_id.partition(":")
+            glossary_ctx = self._build_glossary_context(identifier)
+            if glossary_ctx is not None:
+                glossary_terms.append(glossary_ctx)
+
+        examples: list[ExampleContext] = []
+        for result in example_results:
+            _, _, identifier = result.document.doc_id.partition(":")
+            example_ctx = self._build_example_context(identifier, result.score)
+            if example_ctx is not None:
+                examples.append(example_ctx)
+
+        total_retrieved = (
+            len(table_results) + len(metric_results) + len(glossary_results) + len(example_results)
+        )
         context = SchemaContext(
             tables=tables,
             joins=self._collect_joins(tables),
@@ -105,7 +133,7 @@ class SchemaLinker:
             dialect=self._scl_manager.scl.database.dialect.value,
             default_time_column=self._default_time_column(tables),
             retrieval_query=query,
-            total_retrieved=len(results),
+            total_retrieved=total_retrieved,
         )
         logger.info(
             "Schema linked: %d table(s), %d metric(s), %d glossary term(s), %d example(s) "
@@ -114,7 +142,7 @@ class SchemaLinker:
             len(metrics),
             len(glossary_terms),
             len(examples),
-            len(results),
+            total_retrieved,
         )
         return context
 
