@@ -14,8 +14,18 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# pydantic-settings' own env_file=".env" parsing (below) only populates
+# this Settings model's fields -- it never exports values into the real
+# process environment. Provider SDKs pydantic-ai depends on (OpenAI,
+# Anthropic, ...) read ANTHROPIC_API_KEY/OPENAI_API_KEY directly from
+# os.environ, so without this, exactly the setup .env.example itself
+# documents (drop the key in .env, nothing else) silently leaves those
+# keys invisible to anything but this Settings object.
+load_dotenv()
 
 
 class VectorBackend(str, Enum):
@@ -41,6 +51,14 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # .env.example itself documents ANTHROPIC_API_KEY/OPENAI_API_KEY
+        # living in the same .env file, unprefixed, for the provider SDKs
+        # to read directly -- env_prefix only filters which *matching*
+        # keys map to a field, it doesn't make pydantic-settings ignore
+        # the rest of a dotenv file's other keys, so without extra="ignore"
+        # any such key (present exactly as documented) crashes Settings()
+        # construction with "Extra inputs are not permitted".
+        extra="ignore",
     )
 
     # ── Database ─────────────────────────────────────────────────────────────
