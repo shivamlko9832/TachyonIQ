@@ -210,6 +210,26 @@ class Settings(BaseSettings):
         description="Enable role-based access control (requires jwt_secret_key).",
     )
 
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    rate_limit_enabled: bool = Field(
+        default=False,
+        description="Enable per-client sliding-window rate limiting. "
+                    "Disabled by default for local dev; enable in production.",
+    )
+    rate_limit_rpm: int = Field(
+        default=60,
+        ge=1,
+        le=10_000,
+        description="Maximum requests per minute per client IP.",
+    )
+    rate_limit_burst: int = Field(
+        default=10,
+        ge=1,
+        le=500,
+        description="Additional burst allowance above rate_limit_rpm. "
+                    "Total capacity = rpm + burst.",
+    )
+
     # ── Audit logging ─────────────────────────────────────────────────────────
     audit_log_path: Path | None = Field(
         default=None,

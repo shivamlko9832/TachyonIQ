@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from uada.api.middleware.auth import AuthMiddleware
+from uada.api.middleware.rate_limit import RateLimitMiddleware
+from uada.api.middleware.request_id import RequestIdMiddleware
 from uada.api.routes import analyses, connections, health, query, session, ui
 
 if TYPE_CHECKING:
@@ -137,6 +139,8 @@ def create_app(
 
     app = FastAPI(title="UADA", version="0.1.0", lifespan=lifespan)
     app.add_middleware(AuthMiddleware, settings=settings)
+    app.add_middleware(RateLimitMiddleware, settings=settings)
+    app.add_middleware(RequestIdMiddleware)
 
     if orchestrator is None:
         # Real deployment only: instrumenting every test-created app would
