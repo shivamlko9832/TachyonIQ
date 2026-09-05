@@ -194,6 +194,65 @@ table.data-tbl tr:hover td { background: rgba(255,255,255,.03); }
 #modal-status { font-size: 12px; margin-top: 10px; min-height: 18px; }
 #modal-status.ok { color: var(--up); }
 #modal-status.err { color: var(--danger); }
+/* ── Data Quality ── */
+.dq-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+            border-radius: 20px; font-size: 12px; font-weight: 600; margin-top: 8px; cursor: default; }
+.dq-badge.dq-high { background: rgba(0,212,170,.15); color: var(--up); border: 1px solid rgba(0,212,170,.3); }
+.dq-badge.dq-medium { background: rgba(255,158,100,.12); color: #ff9e64; border: 1px solid rgba(255,158,100,.3); }
+.dq-badge.dq-low { background: rgba(255,77,106,.12); color: var(--danger); border: 1px solid rgba(255,77,106,.3); }
+.dq-issues { margin-top: 5px; }
+.dq-issue { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 11px; color: var(--muted); }
+.dq-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dq-dot.high { background: var(--danger); }
+.dq-dot.medium { background: #ff9e64; }
+.dq-dot.low { background: var(--muted); }
+
+/* ── Explainability Accordion ── */
+.ex-accordion { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.ex-header { padding: 8px 12px; background: rgba(255,255,255,.03); font-size: 12px; font-weight: 600;
+             color: var(--muted); cursor: pointer; display: flex; align-items: center;
+             justify-content: space-between; user-select: none; transition: background .15s; }
+.ex-header:hover { background: rgba(108,99,255,.1); color: var(--text); }
+.ex-body { display: none; padding: 10px 12px; font-size: 12px; line-height: 1.7; color: var(--muted);
+           border-top: 1px solid var(--border); }
+.ex-body.open { display: block; }
+.ex-sec { margin-bottom: 8px; }
+.ex-sec:last-child { margin-bottom: 0; }
+.ex-sec-lbl { font-size: 10px; font-weight: 700; color: var(--text); text-transform: uppercase;
+              letter-spacing: 0.5px; margin-bottom: 3px; }
+.ex-step::before { content: "→ "; color: var(--accent); }
+
+/* ── Generated Insights ── */
+.insights-panel { margin-top: 10px; background: rgba(108,99,255,.06); border: 1px solid rgba(108,99,255,.22);
+                  border-radius: var(--radius); padding: 12px 14px; }
+.insights-hdr { font-size: 10px; font-weight: 700; color: var(--accent); text-transform: uppercase;
+                letter-spacing: 0.6px; margin-bottom: 8px; }
+.insights-sec { margin-bottom: 8px; }
+.insights-sec:last-child { margin-bottom: 0; }
+.insights-sec-lbl { font-size: 10px; font-weight: 600; color: var(--muted); margin-bottom: 3px;
+                    text-transform: uppercase; letter-spacing: 0.4px; }
+.insights-item { font-size: 12px; line-height: 1.5; color: var(--text); padding: 2px 0; }
+.insights-item::before { content: "• "; color: var(--accent2); }
+.insights-conf { font-size: 10px; color: var(--muted); margin-top: 6px; font-style: italic; }
+
+/* ── Anomalies ── */
+.anomaly-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; margin-top: 8px;
+                 border-radius: 12px; font-size: 11px; font-weight: 600;
+                 background: rgba(255,77,106,.12); color: var(--danger); border: 1px solid rgba(255,77,106,.3); }
+.anomaly-row { margin-top: 4px; font-size: 11px; color: var(--muted); padding: 4px 8px;
+               background: rgba(255,77,106,.05); border-radius: 4px; border-left: 2px solid var(--danger); }
+
+/* ── Correlation ── */
+.corr-wrap { margin-top: 8px; }
+.corr-lbl-row { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.corr-pair { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; }
+.corr-names { min-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.corr-bar-bg { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.corr-bar { height: 100%; border-radius: 2px; }
+.corr-bar.pos { background: var(--up); }
+.corr-bar.neg { background: var(--danger); }
+.corr-val { min-width: 34px; text-align: right; color: var(--muted); }
+
 </style>
 </head>
 <body>
@@ -481,6 +540,125 @@ function renderChips(questions) {
   return `<div class="chips">${chips}</div>`;
 }
 
+// ── Data Quality ────────────────────────────────────────────────────────────
+function renderDataQuality(dq) {
+  if (!dq || dq.skipped) return '';
+  const score = dq.overall_quality_score != null ? dq.overall_quality_score : 100;
+  const cls = score >= 80 ? 'dq-high' : score >= 50 ? 'dq-medium' : 'dq-low';
+  const icon = score >= 80 ? '✓' : score >= 50 ? '⚠' : '✗';
+  let h = `<div class="dq-badge ${cls}">${icon} Data Quality: ${score.toFixed(0)}%</div>`;
+  if (dq.summary) h += `<div style="font-size:11px;color:var(--muted);margin-top:3px">${dq.summary}</div>`;
+  if (dq.issues && dq.issues.length) {
+    h += '<div class="dq-issues">' + dq.issues.slice(0,4).map(i =>
+      `<div class="dq-issue"><div class="dq-dot ${i.severity}"></div><span><b>${i.column}</b>: ${i.detail || i.issue_type}</span></div>`
+    ).join('') + '</div>';
+  }
+  return h;
+}
+
+// ── Explainability ──────────────────────────────────────────────────────────
+let _exId = 0;
+function renderExplainability(ex) {
+  if (!ex) return '';
+  const id = 'ex-' + (++_exId);
+  let body = '';
+  if (ex.calculation_steps && ex.calculation_steps.length)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Calculation Steps</div>${ex.calculation_steps.map(s=>`<div class="ex-step">${s}</div>`).join('')}</div>`;
+  if (ex.filters_applied && ex.filters_applied.length)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Filters</div><div>${ex.filters_applied.join(', ')}</div></div>`;
+  if (ex.aggregations && ex.aggregations.length)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Aggregations</div><div>${ex.aggregations.join(', ')}</div></div>`;
+  if (ex.tables_referenced && ex.tables_referenced.length)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Tables</div><div>${ex.tables_referenced.join(', ')}</div></div>`;
+  if (ex.assumptions && ex.assumptions.length)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Assumptions</div><div>${ex.assumptions.join('; ')}</div></div>`;
+  if (ex.chart_rationale)
+    body += `<div class="ex-sec"><div class="ex-sec-lbl">Chart Choice</div><div>${ex.chart_rationale}</div></div>`;
+  if (!body) return '';
+  return `<div class="ex-accordion">
+    <div class="ex-header" onclick="var b=document.getElementById('${id}');b.classList.toggle('open');this.querySelector('.ex-arr').textContent=b.classList.contains('open')?'▲':'▼'">
+      <span>🔍 How this was calculated</span><span class="ex-arr">▼</span>
+    </div>
+    <div class="ex-body" id="${id}">${body}</div>
+  </div>`;
+}
+
+// ── Generated Insights ──────────────────────────────────────────────────────
+function renderInsights(ins) {
+  if (!ins) return '';
+  const hasSomething = (ins.key_findings && ins.key_findings.length)
+    || (ins.drivers && ins.drivers.length)
+    || (ins.recommendations && ins.recommendations.length);
+  if (!hasSomething) return '';
+  let h = '<div class="insights-panel"><div class="insights-hdr">✨ AI Insights</div>';
+  if (ins.key_findings && ins.key_findings.length)
+    h += `<div class="insights-sec"><div class="insights-sec-lbl">Key Findings</div>${ins.key_findings.map(f=>`<div class="insights-item">${f}</div>`).join('')}</div>`;
+  if (ins.drivers && ins.drivers.length)
+    h += `<div class="insights-sec"><div class="insights-sec-lbl">Drivers</div>${ins.drivers.map(d=>`<div class="insights-item">${d}</div>`).join('')}</div>`;
+  if (ins.recommendations && ins.recommendations.length)
+    h += `<div class="insights-sec"><div class="insights-sec-lbl">Recommendations</div>${ins.recommendations.map(r=>`<div class="insights-item">${r}</div>`).join('')}</div>`;
+  if (ins.confidence)
+    h += `<div class="insights-conf">Confidence: ${ins.confidence}</div>`;
+  return h + '</div>';
+}
+
+// ── Forecast Sparkline ──────────────────────────────────────────────────────
+function renderForecast(fc) {
+  if (!fc || fc.skipped || !fc.forecast_values || !fc.forecast_values.length) return '';
+  const id = 'fc-' + (++chartIdCounter);
+  const vals = fc.forecast_values.slice(0, 12);
+  const spec = {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 'container', height: 80, background: 'transparent',
+    data: { values: vals.map((v, i) => ({i, v})) },
+    mark: { type: 'area', line: { color: '#6c63ff' }, color: { expr: "{'gradient':'linear','stops':[{'offset':0,'color':'rgba(108,99,255,0.3)'},{'offset':1,'color':'rgba(108,99,255,0)'}],'x1':0,'y1':0,'x2':0,'y2':1}" } },
+    encoding: {
+      x: { field: 'i', type: 'quantitative', axis: null },
+      y: { field: 'v', type: 'quantitative', axis: { labelColor: '#7b7f96', tickCount: 3, gridColor: '#2a2d3a' } }
+    },
+    config: { view: { stroke: null } }
+  };
+  setTimeout(() => {
+    const el = document.getElementById(id);
+    if (el) vegaEmbed('#'+id, spec, {actions:false, theme:'dark', renderer:'svg'}).catch(()=>{});
+  }, 60);
+  const label = fc.method ? `Forecast · ${fc.method}` : 'Forecast';
+  return `<div class="chart-wrap" style="margin-top:8px">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${label} · next ${vals.length} periods</div>
+    <div id="${id}"></div>
+  </div>`;
+}
+
+// ── Anomaly Highlights ──────────────────────────────────────────────────────
+function renderAnomalies(an) {
+  if (!an || an.skipped || !an.anomaly_count) return '';
+  let h = `<div class="anomaly-badge">⚠ ${an.anomaly_count} anomal${an.anomaly_count===1?'y':'ies'} detected</div>`;
+  if (an.top_anomalies && an.top_anomalies.length)
+    h += an.top_anomalies.slice(0,3).map(row => {
+      const txt = Object.entries(row).slice(0,4).map(([k,v])=>`${k}: <b>${v}</b>`).join(' · ');
+      return `<div class="anomaly-row">${txt}</div>`;
+    }).join('');
+  return h;
+}
+
+// ── Correlation Pairs ───────────────────────────────────────────────────────
+function renderCorrelation(corr) {
+  if (!corr || corr.skipped || !corr.top_pairs || !corr.top_pairs.length) return '';
+  const pairs = corr.top_pairs.slice(0, 5);
+  let h = '<div class="corr-wrap"><div class="corr-lbl-row">Top Correlations</div>';
+  pairs.forEach(p => {
+    const val = typeof p.correlation === 'number' ? p.correlation : 0;
+    const pct = Math.abs(val * 100).toFixed(0);
+    const cls = val >= 0 ? 'pos' : 'neg';
+    h += `<div class="corr-pair">
+      <div class="corr-names">${p.col_a} ↔ ${p.col_b}</div>
+      <div class="corr-bar-bg"><div class="corr-bar ${cls}" style="width:${pct}%"></div></div>
+      <div class="corr-val">${val>=0?'+':''}${val.toFixed(2)}</div>
+    </div>`;
+  });
+  return h + '</div>';
+}
+
 function renderDataTable(data) {
   if (!data || !data.columns || !data.rows || !data.rows.length) return;
   const hdrs = data.columns.map(c => `<th>${c}</th>`).join('');
@@ -549,6 +727,14 @@ async function sendQuestion(question) {
         html += `<div style="color:var(--muted);font-size:12px;margin-top:8px">No chart: ${viz.reason}</div>`;
       }
     }
+
+    // P4-A rich response fields
+    html += renderDataQuality(d.data_quality);
+    html += renderExplainability(d.explainability);
+    html += renderInsights(d.generated_insights);
+    html += renderForecast(d.forecast_result);
+    html += renderAnomalies(d.anomaly_result);
+    html += renderCorrelation(d.correlation_result);
     html += '</div>';
 
     // Follow-up chips
