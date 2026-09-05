@@ -139,3 +139,11 @@ def create_app(
     app.include_router(query.router)
     app.include_router(session.router)
     return app
+
+
+# The real deployment entry point, e.g. `uvicorn uada.api.app:app`. This
+# only builds the FastAPI app object and registers the lifespan hook --
+# it does not bootstrap the orchestrator; that happens once when a real
+# server actually starts serving (or a TestClient enters as a context
+# manager), never merely from importing this module.
+app = create_app()
