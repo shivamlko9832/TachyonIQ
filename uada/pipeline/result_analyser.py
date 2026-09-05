@@ -287,9 +287,37 @@ class ResultAnalyser:
             if dimension in df.columns and measure in df.columns:
                 top_row = df.iloc[0]
                 return f"{top_row[dimension]}: {_format_number(float(top_row[measure]))}"
-        if numeric_summaries and numeric_summaries[0].sum is not None:
-            summary = numeric_summaries[0]
+        summary = self._select_fallback_summary(intent, numeric_summaries)
+        if summary is not None and summary.sum is not None:
             return f"{summary.column}: {_format_number(summary.sum)}"  # type: ignore[arg-type]
+        return None
+
+    def _select_fallback_summary(
+        self,
+        intent: AnalyticalIntent,
+        numeric_summaries: list[NumericSummary],
+    ) -> NumericSummary | None:
+        """
+        Pick the numeric column the key finding should summarise, without
+        ever guessing at an unrelated one.
+
+        `ColumnMeta` carries no primary/foreign-key flag (it's one of the
+        fully-specified models), so a raw listing query's first numeric
+        column is just as likely to be an id column as an actual measure
+        -- e.g. a bare "SELECT * FROM customers" once summed its `id`
+        column into a nonsensical "id: 10,450.00" key finding. Preferring
+        a column intent.measures actually names, and otherwise only
+        trusting a single unambiguous numeric column, avoids that without
+        needing schema access this stage doesn't have.
+        """
+        if not numeric_summaries:
+            return None
+        named_measures = {m.lower() for m in intent.measures}
+        for summary in numeric_summaries:
+            if summary.column.lower() in named_measures:
+                return summary
+        if len(numeric_summaries) == 1:
+            return numeric_summaries[0]
         return None
 
 

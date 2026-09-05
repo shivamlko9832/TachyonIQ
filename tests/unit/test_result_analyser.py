@@ -267,3 +267,63 @@ class TestComparisonFlag:
         intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
         analysed = analyser.analyse(result, intent)
         assert analysed.has_comparison is False
+
+
+class TestKeyFindingFallback:
+    """
+    Regression coverage for a real bug found running a raw listing query
+    (e.g. a FOLLOW_UP_REFINE "only show enterprise customers" -> SELECT *
+    FROM customers) through the live pipeline: with no declared measures,
+    the key finding used to always pick numeric_summaries[0] -- the
+    first int/float-typed column -- with no regard for whether it was an
+    actual measure. `id` is almost always the first column, so this
+    produced a nonsensical key finding like "id: 10,450.00" (summing
+    primary keys).
+    """
+
+    def test_multiple_numeric_columns_with_no_matching_measure_yields_no_key_finding(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        # A bare "SELECT *" listing: `id` is the first numeric column,
+        # but it's a primary key, not something intent.measures names.
+        result = _result(
+            columns=[
+                ColumnMeta(name="id", data_type="int"),
+                ColumnMeta(name="tier", data_type="str"),
+                ColumnMeta(name="signup_bonus", data_type="float"),
+            ],
+            rows=[[6, "Enterprise", 50.0], [19, "Enterprise", 75.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=[])
+        analysed = analyser.analyse(result, intent)
+        assert analysed.key_finding is None
+
+    def test_single_numeric_column_still_used_even_without_a_declared_measure(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        # Unambiguous: there's only one numeric column to pick, so it's
+        # still safe to use it as the key finding.
+        result = _result(
+            columns=[
+                ColumnMeta(name="revenue", data_type="float"),
+                ColumnMeta(name="region", data_type="str"),
+            ],
+            rows=[[100.0, "West"], [200.0, "East"]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=[])
+        analysed = analyser.analyse(result, intent)
+        assert analysed.key_finding == "revenue: 300.00"
+
+    def test_declared_measure_wins_over_column_order(self, analyser: ResultAnalyser) -> None:
+        # `id` still comes first, but intent.measures names `revenue` --
+        # that's the one the key finding should summarise.
+        result = _result(
+            columns=[
+                ColumnMeta(name="id", data_type="int"),
+                ColumnMeta(name="revenue", data_type="float"),
+            ],
+            rows=[[6, 100.0], [19, 200.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+        assert analysed.key_finding == "revenue: 300.00"
