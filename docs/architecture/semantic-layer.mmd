@@ -1,0 +1,81 @@
+graph TB
+    subgraph YAML["SCL Source (YAML)"]
+        YDB["database:\n  name: acme_analytics\n  dialect: postgresql"]
+        YTABLES["tables:\n  - name: orders\n    grain: one row per order\n    columns: [...]"]
+        YMETRICS["metrics:\n  - name: revenue\n    formula: SUM(orders.revenue)"]
+        YJOINS["joins:\n  - from: orders\n    to: customers\n    on: customer_id = customer_id"]
+        YGLOSS["glossary:\n  - term: enterprise customer\n    sql_filter: segment = 'Enterprise'"]
+        YEXAMPLES["examples:\n  - question: revenue last month\n    sql: SELECT SUM(revenue)..."]
+        YSECURITY["security:\n  excluded_tables: [audit_log, api_keys]\n  excluded_columns: [internal_credit_score]"]
+    end
+
+    subgraph LOADER["SCLLoader"]
+        SAFE_YAML["Custom SafeLoader\n(fixes YAML 1.1 on/off→bool bug)"]
+        PYDANTIC_VAL["Pydantic validation\nJoin table existence check\nAt-most-one default_time_column"]
+    end
+
+    YAML --> LOADER
+    LOADER --> SCL
+
+    subgraph SCL["SemanticContextLayer (Pydantic)"]
+        SCL_TABLES["included_tables\n(excludes security.excluded_tables)"]
+        SCL_METRICS["MetricDefinition\nformula | unit | aliases"]
+        SCL_JOINS["JoinDefinition\nbidirectional lookup"]
+        SCL_GLOSS["GlossaryTerm\nsql_filter | applies_to_table"]
+        SCL_EXAMPLES["ExampleQuery\nintent_type | dialect"]
+    end
+
+    subgraph SCL_MGR["SCLManager (Indexed View)"]
+        METRIC_IDX["metric_index\n(case-insensitive + aliases)"]
+        GLOSS_IDX["glossary_index\n(case-insensitive + aliases)"]
+        ALLOWED["get_allowed_tables()\n→ frozenset[str]\n(security policy enforced)"]
+        JOIN_PATH["get_join_path(from, to)\nbidirectional graph lookup"]
+        INDEXABLE["to_indexable_documents()\nOne doc per table/metric/glossary/example\nExcluded items NEVER indexed"]
+    end
+
+    SCL --> SCL_MGR
+
+    subgraph REFLECTOR["SCLReflector (Auto-generation)"]
+        INTROSPECT["SQLAlchemy Inspector\nTable | Column | PK | FK reflection"]
+        SEMANTIC_INFER["Semantic type inference\ncolumn name heuristics\n(revenue→MEASURE, date→TEMPORAL, etc.)"]
+        FK_JOINS["FK → JoinDefinition\n(skips FK to unknown tables)"]
+        PROFILE["DataProfiler ★ ADD\nnull% | distinct count\nmin/max | sample values\ntemporal range"]
+    end
+
+    ALLOWED --> REFLECTOR
+    REFLECTOR --> SCL
+
+    subgraph RETRIEVAL["Retrieval & Indexing"]
+        EMBED_DOCS["Embedder\nSentenceTransformer\nBAAI/bge-small-en-v1.5"]
+        CHROMA["ChromaDB\nOne collection per doctype\nTABLE | METRIC | GLOSSARY\nEXAMPLE | JOIN"]
+        BM25["BM25Index\nregex tokenizer [a-z0-9]+\nBM25Okapi"]
+        RRF["HybridRetriever\nRRF k=60\nPer-doctype budget\nSecurity re-check"]
+        SCHEMA_CTX["SchemaContext\n.to_prompt_context()\nToken-efficient LLM injection"]
+    end
+
+    INDEXABLE --> EMBED_DOCS
+    EMBED_DOCS --> CHROMA
+    INDEXABLE --> BM25
+    CHROMA --> RRF
+    BM25 --> RRF
+    RRF --> SCHEMA_CTX
+    ALLOWED --> RRF
+
+    subgraph REFRESH["Schema Refresh Flow ★ ADD"]
+        FINGERPRINT["SHA-256 schema fingerprint\n(sorted table.column pairs)"]
+        DRIFT["Fingerprint comparison\n(detect schema changes)"]
+        INCREMENTAL["Incremental upsert\n(only changed documents)"]
+        TRIGGER["Refresh triggers:\nPOST /connections/{id}/refresh\nNew connection profile\nScheduled (configurable)"]
+    end
+
+    REFLECTOR --> FINGERPRINT
+    FINGERPRINT --> DRIFT
+    DRIFT --> INCREMENTAL
+    INCREMENTAL --> CHROMA
+    TRIGGER --> REFRESH
+
+    subgraph COMPAT["Cube.js Compatibility"]
+        CUBE_COMPAT["SCL is Cube-compatible YAML\nMeasures → metrics\nDimensions → columns\nJoins → joins\nFilters → security\nCan import from Cube.js project"]
+    end
+
+    SCL --- COMPAT

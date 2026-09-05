@@ -1,0 +1,101 @@
+graph TB
+    subgraph CLIENT["Client Layer"]
+        UI["Production Frontend\n3-Panel UX\n(Left: Nav | Main: Chat | Right: SQL)"]
+        API_CLIENT["REST Client\nPOST /query\nGET /connections\nSSE /query/stream"]
+    end
+
+    subgraph API["API Layer (FastAPI)"]
+        AUTH["AuthMiddleware\nBearer token / JWT\nRBAC role check"]
+        QUERY_ROUTE["Query Route\nPOST /query\nPOST /query/stream"]
+        CONN_ROUTE["Connection Route\nPOST /connections\nPOST /connections/{id}/test\nPOST /connections/{id}/profile"]
+        HEALTH["Health / Metrics\nGET /health\nGET /metrics"]
+    end
+
+    subgraph ORCH["Orchestration Layer"]
+        ORCHESTRATOR["PipelineOrchestrator\nSecurity-correct retry loop\nSQL validated INSIDE loop"]
+        CONN_MGR["DatabaseConnectionManager\nRuntime registry\nConnection pooling\nSession → DB binding"]
+    end
+
+    subgraph PIPELINE["Analysis Pipeline"]
+        SCHEMA_LINKER["SchemaLinker\nHybrid retrieval\nPer-doctype budget\nSecurity re-check"]
+        INTENT["IntentExtractor\nPydanticAI Agent\nAnalyticalIntent output"]
+        PLANNER["QueryPlanner\nDeterministic\nDialect-aware SQL fragments\n16 RelativePeriods × 7 dialects"]
+        SQL_GEN["SQLGenerator\nPydanticAI Agent\nRepair loop"]
+        VALIDATOR["SQLValidator ★\nSQLGlot AST\n6 security rules\nRuns EVERY iteration"]
+        ANALYSER["ResultAnalyser\nPandas + DuckDB\nStats | Trend | Outliers\nInsight narration"]
+        VIZ["VizGenerator\n20+ chart types\nKPI cards\nDeterministic + LLM fallback"]
+        FOLLOWUP["FollowUpEngine\nContextual suggestions\n3-5 chips per answer"]
+        INSIGHTS["InsightGenerator\nKey Findings\nDrivers | Anomalies\nRecommendations"]
+    end
+
+    subgraph SEMANTIC["Semantic Layer"]
+        SCL["SemanticContextLayer\nYAML-based\nTables | Metrics | Joins\nGlossary | Examples | Security"]
+        SCL_MGR["SCLManager\nIndexed view\nAllowlist enforcement\nJoin path resolution"]
+        REFLECTOR["SCLReflector\nSchema → candidate SCL\nData profiling stats"]
+        PROFILER["DataProfiler\nnull% | distinct count\nmin/max/samples\nTemporal range"]
+    end
+
+    subgraph RETRIEVAL["Retrieval Layer"]
+        HYBRID["HybridRetriever\nRRF k=60\nPer-doctype budget"]
+        CHROMA["ChromaDB\nVector store\nBAAI/bge-small-en-v1.5"]
+        BM25["BM25Index\nLexical retrieval\nExact-name matching"]
+        EMBEDDER["Embedder\nSentenceTransformer\nBatch encoding"]
+    end
+
+    subgraph DB["Database Layer"]
+        INTERFACE["DatabaseAdapter ABC\ntest_connection\nexecute_query\nget_raw_schema\nexplain_query"]
+        PG["PostgreSQL\nSQLAlchemy 2.0"]
+        MYSQL["MySQL\nSQLAlchemy 2.0"]
+        SQLITE["SQLite\nSQLAlchemy 2.0"]
+        MSSQL["SQL Server\nSQLAlchemy 2.0"]
+        SNOWFLAKE["Snowflake\nsnowflake-sqlalchemy"]
+        BIGQUERY["BigQuery\nsqlalchemy-bigquery"]
+        REDSHIFT["Redshift\nsqlalchemy-redshift"]
+    end
+
+    subgraph STORE["Persistence Layer"]
+        CONV_STORE["ConversationStore\nRedis-backed\nTTL sessions\nCoE-SQL history"]
+        ANALYSIS_STORE["AnalysisStore\nSaved analyses\nQuery history\nShared permalinks"]
+        AUDIT["AuditLog\nStructured events\nWho/What/When/SQL"]
+    end
+
+    subgraph OBS["Observability"]
+        OTEL["OpenTelemetry\nSpans + traces"]
+        LANGFUSE["Langfuse\nLLM token tracking\nLatency | Cost"]
+        METRICS["Prometheus metrics\nQuery latency p50/p99\nError rates"]
+    end
+
+    UI --> API_CLIENT
+    API_CLIENT --> AUTH
+    AUTH --> QUERY_ROUTE
+    AUTH --> CONN_ROUTE
+    QUERY_ROUTE --> ORCHESTRATOR
+    CONN_ROUTE --> CONN_MGR
+    ORCHESTRATOR --> SCHEMA_LINKER
+    ORCHESTRATOR --> INTENT
+    ORCHESTRATOR --> PLANNER
+    ORCHESTRATOR --> SQL_GEN
+    ORCHESTRATOR --> VALIDATOR
+    ORCHESTRATOR --> ANALYSER
+    ORCHESTRATOR --> VIZ
+    ORCHESTRATOR --> FOLLOWUP
+    ORCHESTRATOR --> INSIGHTS
+    SCHEMA_LINKER --> HYBRID
+    HYBRID --> CHROMA
+    HYBRID --> BM25
+    CHROMA --> EMBEDDER
+    SCL --> SCL_MGR
+    SCL_MGR --> REFLECTOR
+    REFLECTOR --> PROFILER
+    SCL_MGR --> SCHEMA_LINKER
+    SCL_MGR --> VALIDATOR
+    ORCHESTRATOR --> CONV_STORE
+    CONN_MGR --> INTERFACE
+    INTERFACE --> PG
+    INTERFACE --> MYSQL
+    INTERFACE --> SQLITE
+    INTERFACE --> MSSQL
+    INTERFACE --> SNOWFLAKE
+    INTERFACE --> BIGQUERY
+    INTERFACE --> REDSHIFT
+    ORCHESTRATOR --> OBS

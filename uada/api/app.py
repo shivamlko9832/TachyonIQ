@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from uada.api.middleware.auth import AuthMiddleware
-from uada.api.routes import health, query, session, ui
+from uada.api.routes import analyses, connections, health, query, session, ui
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     """Construct every pipeline dependency from `settings` for a real deployment."""
     from uada.db.adapter import SQLAlchemyAdapter
+    from uada.db.connection_manager import DatabaseConnectionManager
+    from uada.pipeline.followup_engine import FollowUpEngine
     from uada.observability.tracer import configure_tracing
     from uada.pipeline.conversation_store import ConversationStore
     from uada.pipeline.intent_extractor import IntentExtractor
@@ -77,6 +79,11 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         default_limit=settings.db_max_rows,
     )
 
+    followup_engine = FollowUpEngine()
+
+    from uada.observability.audit import AuditLogger
+    audit_logger = AuditLogger(settings.audit_log_path)
+
     return PipelineOrchestrator(
         db_adapter=db_adapter,
         scl_manager=scl_manager,
@@ -89,6 +96,8 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         conversation_store=ConversationStore(settings, database_id=scl.database.name),
         validator=validator,
         settings=settings,
+        followup_engine=followup_engine,
+        audit_logger=audit_logger,
     )
 
 
@@ -122,6 +131,8 @@ def create_app(
             logger.info("Bootstrapping pipeline orchestrator...")
             app.state.orchestrator = _bootstrap_orchestrator(settings)
             logger.info("Pipeline orchestrator ready.")
+        from uada.db.connection_manager import DatabaseConnectionManager
+        app.state.connection_manager = DatabaseConnectionManager()
         yield
 
     app = FastAPI(title="UADA", version="0.1.0", lifespan=lifespan)
@@ -135,6 +146,8 @@ def create_app(
 
         instrument_app(app)
 
+    app.include_router(analyses.router)
+    app.include_router(connections.router)
     app.include_router(health.router)
     app.include_router(query.router)
     app.include_router(session.router)

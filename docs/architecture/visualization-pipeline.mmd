@@ -1,0 +1,92 @@
+graph TB
+    subgraph INPUT["Inputs"]
+        INTENT["AnalyticalIntent\nquestion_type\nmeasures | dimensions\ntime_range"]
+        RESULT["AnalysedResult\nQueryResult {columns, rows}\nnumeric_summaries\ntrend_analysis\noutliers\nkey_finding"]
+    end
+
+    subgraph DECISION["Chart Type Decision Tree (Deterministic-First)"]
+        D0{"row_count == 1\nAND numeric_count ≤ 1\nAND no dimensions?"}
+        D1{"question_type\n== TIME_SERIES?"}
+        D2{"question_type\n== RANKING\nAND rows ≤ 20?"}
+        D3{"question_type\n== COMPARISON?"}
+        D4{"question_type\n== DIAGNOSTIC?"}
+        D5{"dimensions ≥ 2?"}
+        D6{"has outliers\nOR anomalies?"}
+        DLLM["LLM Fallback\nValidate mark + columns\nReject invalid spec"]
+
+        D0 -->|Yes| KPI_CARD
+        D0 -->|No| D1
+        D1 -->|Yes| LINE
+        D1 -->|No| D2
+        D2 -->|Yes| BAR_H
+        D2 -->|No| D3
+        D3 -->|Yes| BAR_GROUPED
+        D3 -->|No| D4
+        D4 -->|Yes| SCATTER
+        D4 -->|No| D5
+        D5 -->|Yes| BAR_STACKED
+        D5 -->|No| D6
+        D6 -->|Yes| RULE_OVERLAY
+        D6 -->|No| DLLM
+    end
+
+    INPUT --> DECISION
+
+    subgraph CHART_TYPES["Chart Type Implementations (Altair → Vega-Lite)"]
+        KPI_CARD["KPI Card ★ ADD\nLarge metric value\nTrend arrow ↑↓→\nPrior period delta\nSparkline (if time ctx)"]
+        LINE["Line Chart\ntime as period:O (ordinal)\ncolor by dimension\ntooltip on hover"]
+        AREA["Area Chart\nCumulative trends\nfill opacity 0.3"]
+        BAR_H["Bar Chart (Horizontal)\nRankings\nTop N truncation"]
+        BAR_GROUPED["Grouped Bar\nMulti-series comparison\ncolor encoding"]
+        BAR_STACKED["Stacked Bar ★ ADD\nComposition by category\npercentage option"]
+        SCATTER["Scatter / Point\nCorrelation\nsize = third measure"]
+        ARC["Pie / Donut ★ ENHANCE\nProportions ≤ 7 segments\nLegend outside"]
+        HEATMAP["Heatmap (RECT)\nCross-dimensional density\ncolor = measure"]
+        HISTOGRAM["Histogram ★ ADD\nValue distribution\nauto binning"]
+        WATERFALL["Waterfall ★ ADD\nRunning total / bridge\npositivecolor + negativecolor"]
+        FUNNEL["Funnel ★ ADD\nConversion steps\ndrop-off labels"]
+        TREEMAP["Treemap ★ ADD\nHierarchical proportions"]
+        BOXPLOT["Box Plot\nDistribution quartiles"]
+        RULE_OVERLAY["Rule + Overlay\nAnomaly reference line\nz-score annotation"]
+        TABLE_VIZ["Table Fallback ★ ADD\nSorted by key measure\nConditional formatting\nfor large dimensions"]
+    end
+
+    D0 -->|Yes| KPI_CARD
+    LINE --- LINE
+    DLLM --> LINE
+    DLLM --> SCATTER
+    DLLM --> ARC
+    DLLM --> HEATMAP
+    DLLM --> BOXPLOT
+    DLLM --> TABLE_VIZ
+
+    subgraph MULTI_VIZ["Multi-Visualization ★ ADD"]
+        PRIMARY["Primary Viz\nAnswers the question directly"]
+        SECONDARY["Secondary Viz\nTrend | Distribution | Breakdown"]
+        TERTIARY["Tertiary (optional)\nData quality | Anomaly highlight"]
+        TABS["UI: Tabbed panel\nor stacked layout"]
+        PRIMARY --> TABS
+        SECONDARY --> TABS
+        TERTIARY --> TABS
+    end
+
+    CHART_TYPES --> MULTI_VIZ
+
+    subgraph SPEC["VegaLiteSpec Output"]
+        SPEC_DICT["spec: dict\nVega-Lite JSON\n(full Altair output)"]
+        CHART_TYPE_FIELD["chart_type: ChartType enum"]
+        VALID_CHECK["is_valid()\nStructural check:\n- mark present\n- encoding present\n- referenced columns exist"]
+        FALLBACK["VisualisationFallback\nreason: str\ndata_available: bool"]
+    end
+
+    CHART_TYPES --> SPEC
+
+    subgraph RENDER["Frontend Rendering"]
+        VEGA_EMBED["vega-embed\n(existing, keep)"]
+        RESPONSIVE["Responsive container\n100% width\nauto-height"]
+        INTERACTION["Interactivity\nTooltips\nZoom / pan\nClick to filter ★ ADD"]
+    end
+
+    SPEC --> VEGA_EMBED
+    VEGA_EMBED --> RESPONSIVE
+    RESPONSIVE --> INTERACTION

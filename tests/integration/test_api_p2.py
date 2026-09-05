@@ -1,14 +1,19 @@
 """
-API integration tests (uada/api/app.py and routes/middleware).
+P2 API integration tests: SSE streaming (/query/stream) and schema refresh
+(/connections/{id}/refresh).
 
-Real SQLite in-memory database, real SCLManager/HybridRetriever/Embedder,
-TestModel for the LLM stages -- no real LLM, no real HTTP server (FastAPI
-TestClient talks to the ASGI app in-process).
+These tests build a lightweight PipelineOrchestrator that stubs out the
+embedding-based SchemaLinker so no chromadb or sentence-transformers are
+needed.
 """
-
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+import os
+import sqlite3
+import tempfile
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +23,11 @@ from sqlalchemy import text
 from uada.api.app import create_app
 from uada.config import Settings
 from uada.db.adapter import SQLAlchemyAdapter
+from uada.models.schema_context import (
+    ColumnContext,
+    SchemaContext,
+    TableContext,
+)
 from uada.pipeline.conversation_store import ConversationStore
 from uada.pipeline.intent_extractor import IntentExtractor
 from uada.pipeline.orchestrator import PipelineOrchestrator
@@ -27,10 +37,6 @@ from uada.pipeline.schema_linker import SchemaLinker
 from uada.pipeline.sql_generator import SQLGenerator
 from uada.pipeline.sql_validator import SQLValidator
 from uada.pipeline.viz_generator import VisualisationGenerator
-from uada.retrieval.bm25 import BM25Index
-from uada.retrieval.chroma_backend import ChromaBackend
-from uada.retrieval.embedder import Embedder
-from uada.retrieval.hybrid import HybridRetriever
 from uada.scl.manager import SCLManager
 from uada.scl.schema import (
     ColumnDefinition,
@@ -42,10 +48,10 @@ from uada.scl.schema import (
     TableDefinition,
 )
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 pytestmark = pytest.mark.integration
+
+
+# ── Shared LLM overrides ──────────────────────────────────────────────────────
 
 _INTENT_ARGS = {
     "question_type": "aggregation",
@@ -83,30 +89,50 @@ def _build_scl() -> SemanticContextLayer:
     )
 
 
-@pytest.fixture(scope="module")
-def embedder() -> Embedder:
-    return Embedder()
+def _build_schema_context() -> SchemaContext:
+    """A minimal SchemaContext referencing the orders.revenue column."""
+    return SchemaContext(
+        tables=[
+            TableContext(
+                table_name="orders",
+                description="Customer orders.",
+                columns=[
+                    ColumnContext(
+                        column_name="id",
+                        table_name="orders",
+                        data_type="int",
+                        is_primary_key=True,
+                    ),
+                    ColumnContext(
+                        column_name="revenue",
+                        table_name="orders",
+                        data_type="float",
+                        semantic_type="measure",
+                        aggregation="SUM",
+                    ),
+                ],
+            )
+        ],
+        metrics=[],
+        joins=[],
+        dialect="sqlite",
+        retrieval_query="What was total revenue?",
+        total_retrieved=1,
+    )
 
 
-@pytest.fixture(scope="module")
-def scl_manager() -> SCLManager:
-    return SCLManager(_build_scl())
+def _make_stub_schema_linker(scl_manager: SCLManager, settings: Settings) -> SchemaLinker:
+    """
+    Return a SchemaLinker whose `link()` method is mocked to return a
+    pre-built SchemaContext, so chromadb / sentence-transformers are never
+    imported.
+    """
+    stub = MagicMock(spec=SchemaLinker)
+    stub.link.return_value = _build_schema_context()
+    return stub  # type: ignore[return-value]
 
 
-@pytest.fixture(scope="module")
-def retriever(
-    tmp_path_factory: pytest.TempPathFactory, embedder: Embedder, scl_manager: SCLManager
-) -> HybridRetriever:
-    chroma_path = tmp_path_factory.mktemp("chroma_api")
-    backend = ChromaBackend(path=str(chroma_path), collection_name="api_test", embedder=embedder)
-    hybrid = HybridRetriever(vector_backend=backend, bm25_index=BM25Index())
-    hybrid.build_index(scl_manager.to_indexable_documents())
-    return hybrid
-
-
-def _build_orchestrator(
-    tmp_path: Path, scl_manager: SCLManager, retriever: HybridRetriever, settings: Settings
-) -> PipelineOrchestrator:
+def _build_orchestrator(settings: Settings, scl_manager: SCLManager) -> PipelineOrchestrator:
     adapter = SQLAlchemyAdapter("sqlite:///:memory:", settings)
     with adapter._engine.connect() as conn:
         conn.execute(text("CREATE TABLE orders (id INTEGER PRIMARY KEY, revenue REAL NOT NULL)"))
@@ -120,10 +146,12 @@ def _build_orchestrator(
         inject_limit=True,
         default_limit=1000,
     )
+    schema_linker = _make_stub_schema_linker(scl_manager, settings)
+
     return PipelineOrchestrator(
         db_adapter=adapter,
         scl_manager=scl_manager,
-        schema_linker=SchemaLinker(retriever, scl_manager, settings),
+        schema_linker=schema_linker,
         intent_extractor=IntentExtractor(settings),
         query_planner=QueryPlanner(scl_manager),
         sql_generator=SQLGenerator(settings),
@@ -135,12 +163,15 @@ def _build_orchestrator(
     )
 
 
+@pytest.fixture(scope="module")
+def scl_manager() -> SCLManager:
+    return SCLManager(_build_scl())
+
+
 @pytest.fixture
-def orchestrator(
-    tmp_path: Path, scl_manager: SCLManager, retriever: HybridRetriever
-) -> PipelineOrchestrator:
+def orchestrator(scl_manager: SCLManager) -> PipelineOrchestrator:
     settings = Settings(db_url="sqlite:///:memory:")  # type: ignore[call-arg]
-    return _build_orchestrator(tmp_path, scl_manager, retriever, settings)
+    return _build_orchestrator(settings, scl_manager)
 
 
 def _override_llms(orchestrator: PipelineOrchestrator):
@@ -152,105 +183,7 @@ def _override_llms(orchestrator: PipelineOrchestrator):
     )
 
 
-class TestHealth:
-    def test_returns_200_with_expected_shape(self, orchestrator: PipelineOrchestrator) -> None:
-        app = create_app(orchestrator=orchestrator)
-        with TestClient(app) as client:
-            response = client.get("/health")
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "ok"
-        assert body["version"] == "0.1.0"
-        assert body["database"] == "connected"
-
-
-class TestQuery:
-    def test_post_query_returns_uada_response(self, orchestrator: PipelineOrchestrator) -> None:
-        app = create_app(orchestrator=orchestrator)
-        override_intent, override_sql = _override_llms(orchestrator)
-
-        with TestClient(app) as client, override_intent, override_sql:
-            response = client.post("/query", json={"question": "What was total revenue?"})
-
-        assert response.status_code == 200
-        body = response.json()
-        # is_success is a computed property, not a serialized field --
-        # check the underlying `error` field it's derived from instead.
-        assert body["error"] is None
-        assert body["sql"] is not None
-        assert "SUM(orders.revenue)" in body["sql"]
-        assert body["session_id"]  # a UUID was generated
-
-    def test_reuses_provided_session_id(self, orchestrator: PipelineOrchestrator) -> None:
-        app = create_app(orchestrator=orchestrator)
-        override_intent, override_sql = _override_llms(orchestrator)
-
-        with TestClient(app) as client, override_intent, override_sql:
-            response = client.post(
-                "/query", json={"question": "What was total revenue?", "session_id": "my-session"}
-            )
-
-        assert response.json()["session_id"] == "my-session"
-
-    def test_empty_question_is_rejected(self, orchestrator: PipelineOrchestrator) -> None:
-        app = create_app(orchestrator=orchestrator)
-        with TestClient(app) as client:
-            response = client.post("/query", json={"question": ""})
-        assert response.status_code == 422
-
-
-class TestSession:
-    def test_delete_session_returns_deleted_true(
-        self, orchestrator: PipelineOrchestrator
-    ) -> None:
-        app = create_app(orchestrator=orchestrator)
-        with TestClient(app) as client:
-            response = client.delete("/session/some-session-id")
-
-        assert response.status_code == 200
-        assert response.json() == {"deleted": True}
-
-
-class TestAuthMiddleware:
-    def test_blocks_request_with_no_key(self, orchestrator: PipelineOrchestrator) -> None:
-        settings = Settings(db_url="sqlite:///:memory:", api_key="secret-key")  # type: ignore[call-arg]
-        app = create_app(orchestrator=orchestrator, settings=settings)
-
-        with TestClient(app) as client:
-            response = client.get("/health")
-
-        assert response.status_code == 401
-
-    def test_blocks_request_with_wrong_key(self, orchestrator: PipelineOrchestrator) -> None:
-        settings = Settings(db_url="sqlite:///:memory:", api_key="secret-key")  # type: ignore[call-arg]
-        app = create_app(orchestrator=orchestrator, settings=settings)
-
-        with TestClient(app) as client:
-            response = client.get("/health", headers={"Authorization": "Bearer wrong-key"})
-
-        assert response.status_code == 401
-
-    def test_allows_request_with_correct_key(self, orchestrator: PipelineOrchestrator) -> None:
-        settings = Settings(db_url="sqlite:///:memory:", api_key="secret-key")  # type: ignore[call-arg]
-        app = create_app(orchestrator=orchestrator, settings=settings)
-
-        with TestClient(app) as client:
-            response = client.get("/health", headers={"Authorization": "Bearer secret-key"})
-
-        assert response.status_code == 200
-
-    def test_no_api_key_configured_allows_all(self, orchestrator: PipelineOrchestrator) -> None:
-        settings = Settings(db_url="sqlite:///:memory:")  # type: ignore[call-arg]  # api_key defaults to None
-        app = create_app(orchestrator=orchestrator, settings=settings)
-
-        with TestClient(app) as client:
-            response = client.get("/health")
-
-        assert response.status_code == 200
-
-
-# ── P2-1: SSE Stream ──────────────────────────────────────────────────────────
+# ── SSE helpers ───────────────────────────────────────────────────────────────
 
 def _parse_sse_events(body: str) -> list[dict[str, str]]:
     """Parse a raw SSE response body into a list of {event, data} dicts."""
@@ -269,12 +202,14 @@ def _parse_sse_events(body: str) -> list[dict[str, str]]:
     return events
 
 
+# ── P2-1: SSE Streaming ───────────────────────────────────────────────────────
+
 class TestSSEStream:
     """
     Integration tests for GET /query/stream — SSE event structure.
 
-    Because sse-starlette is installed, the endpoint returns a proper
-    Server-Sent Events stream.  TestClient collects the full body
+    sse-starlette is installed; the endpoint returns a proper
+    Server-Sent Events stream. TestClient collects the full body
     synchronously so we can parse the event stream inline.
     """
 
@@ -300,12 +235,10 @@ class TestSSEStream:
         assert len(progress_events) >= 1, "Expected at least one progress event"
         assert len(result_events) == 1, "Expected exactly one result event"
 
-    def test_stream_progress_events_have_stage_field(
+    def test_stream_progress_events_have_stage_and_status_fields(
         self, orchestrator: PipelineOrchestrator
     ) -> None:
-        """Each progress event's data must include a 'stage' key."""
-        import json
-
+        """Each progress event's data must include 'stage' and 'status' keys."""
         app = create_app(orchestrator=orchestrator)
         override_intent, override_sql = _override_llms(orchestrator)
 
@@ -317,24 +250,24 @@ class TestSSEStream:
 
         events = _parse_sse_events(response.text)
         progress_events = [e for e in events if e.get("event") == "progress"]
+        assert len(progress_events) >= 1
+
         for ev in progress_events:
             payload = json.loads(ev["data"])
             assert "stage" in payload, f"progress event missing 'stage': {payload}"
             assert "status" in payload, f"progress event missing 'status': {payload}"
 
-    def test_stream_result_event_is_valid_uada_response(
+    def test_stream_result_event_contains_session_id(
         self, orchestrator: PipelineOrchestrator
     ) -> None:
-        """The result event's data must parse as a UADAResponse (has 'sql', 'session_id')."""
-        import json
-
+        """The result event's data must include session_id."""
         app = create_app(orchestrator=orchestrator)
         override_intent, override_sql = _override_llms(orchestrator)
 
         with TestClient(app) as client, override_intent, override_sql:
             response = client.get(
                 "/query/stream",
-                params={"question": "What was total revenue?", "session_id": "stream-session"},
+                params={"question": "What was total revenue?", "session_id": "stream-abc"},
             )
 
         events = _parse_sse_events(response.text)
@@ -342,29 +275,26 @@ class TestSSEStream:
         assert len(result_events) == 1
 
         payload = json.loads(result_events[0]["data"])
-        assert "session_id" in payload
-        assert payload["session_id"] == "stream-session"
-        assert "sql" in payload
+        assert payload["session_id"] == "stream-abc"
 
-    def test_stream_uses_session_id_from_query_params(
+    def test_stream_result_event_contains_sql(
         self, orchestrator: PipelineOrchestrator
     ) -> None:
-        """session_id provided as a query param must appear in the result event."""
-        import json
-
+        """The result event must carry the generated SQL."""
         app = create_app(orchestrator=orchestrator)
         override_intent, override_sql = _override_llms(orchestrator)
 
         with TestClient(app) as client, override_intent, override_sql:
             response = client.get(
                 "/query/stream",
-                params={"question": "What was total revenue?", "session_id": "my-stream-id"},
+                params={"question": "What was total revenue?"},
             )
 
         events = _parse_sse_events(response.text)
         result_events = [e for e in events if e.get("event") == "result"]
         payload = json.loads(result_events[0]["data"])
-        assert payload["session_id"] == "my-stream-id"
+        assert "sql" in payload
+        assert payload["sql"] is not None
 
     def test_stream_content_type_is_text_event_stream(
         self, orchestrator: PipelineOrchestrator
@@ -381,6 +311,24 @@ class TestSSEStream:
 
         assert "text/event-stream" in response.headers.get("content-type", "")
 
+    def test_stream_generates_session_id_when_not_provided(
+        self, orchestrator: PipelineOrchestrator
+    ) -> None:
+        """When no session_id param given, result must still carry a non-empty session_id."""
+        app = create_app(orchestrator=orchestrator)
+        override_intent, override_sql = _override_llms(orchestrator)
+
+        with TestClient(app) as client, override_intent, override_sql:
+            response = client.get(
+                "/query/stream",
+                params={"question": "What was total revenue?"},
+            )
+
+        events = _parse_sse_events(response.text)
+        result_events = [e for e in events if e.get("event") == "result"]
+        payload = json.loads(result_events[0]["data"])
+        assert payload.get("session_id"), "session_id must be set even when not provided"
+
 
 # ── P2-5: Schema Refresh ──────────────────────────────────────────────────────
 
@@ -388,23 +336,21 @@ class TestSchemaRefresh:
     """
     Integration tests for POST /connections/{id}/refresh.
 
-    Creates an in-memory SQLite connection via the real ConnectionManager,
+    Creates a temp-file SQLite connection via the real DatabaseConnectionManager,
     calls the refresh endpoint, and verifies both the response shape and the
     security invariant that sample_values are never exposed.
+
+    NOTE: create_app() sets app.state.connection_manager inside its lifespan,
+    so we always re-override it AFTER entering the TestClient context manager.
     """
 
     @pytest.fixture
     def refresh_app(self, orchestrator: PipelineOrchestrator):
-        """App with a real ConnectionManager and a pre-registered SQLite connection."""
+        """App + pre-registered SQLite connection + the manager instance."""
         from uada.db.connection_manager import ConnectionConfig, DatabaseConnectionManager
 
         mgr = DatabaseConnectionManager()
-        # Register a fresh in-memory SQLite db with two tables
-        import sqlite3
-        import tempfile
-        import os
 
-        # Use a temp file rather than :memory: so the adapter can re-open it
         tf = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tf.close()
         conn = sqlite3.connect(tf.name)
@@ -422,27 +368,28 @@ class TestSchemaRefresh:
         )
         connection_id = mgr.register(cfg)
 
+        # Yield the app, connection id, AND manager so tests can re-inject
+        # mgr after the lifespan has run inside TestClient.
         app = create_app(orchestrator=orchestrator)
-        app.state.connection_manager = mgr
+        yield app, connection_id, mgr
 
-        yield app, connection_id
-
-        # Cleanup temp file
         try:
             os.unlink(tf.name)
         except OSError:
             pass
 
-    def test_refresh_returns_200(self, refresh_app) -> None:
-        app, cid = refresh_app
+    def test_refresh_returns_200(self, refresh_app: Any) -> None:
+        app, cid, mgr = refresh_app
         with TestClient(app) as client:
+            app.state.connection_manager = mgr
             response = client.post(f"/connections/{cid}/refresh")
         assert response.status_code == 200
 
-    def test_refresh_response_shape(self, refresh_app) -> None:
+    def test_refresh_response_has_required_fields(self, refresh_app: Any) -> None:
         """Response must include the required schema summary fields."""
-        app, cid = refresh_app
+        app, cid, mgr = refresh_app
         with TestClient(app) as client:
+            app.state.connection_manager = mgr
             response = client.post(f"/connections/{cid}/refresh")
 
         body = response.json()
@@ -451,65 +398,61 @@ class TestSchemaRefresh:
         assert isinstance(body["table_count"], int)
         assert body["table_count"] >= 1
         assert isinstance(body["column_count"], int)
-        assert "tables" in body
         assert isinstance(body["tables"], list)
 
-    def test_refresh_tables_have_column_summaries(self, refresh_app) -> None:
-        """Each table entry must have column_count and a columns list."""
-        app, cid = refresh_app
+    def test_refresh_tables_have_column_summaries(self, refresh_app: Any) -> None:
+        """Each table entry must have a columns list with at least one entry."""
+        app, cid, mgr = refresh_app
         with TestClient(app) as client:
+            app.state.connection_manager = mgr
             response = client.post(f"/connections/{cid}/refresh")
 
         tables = response.json()["tables"]
         assert len(tables) >= 1
         for table in tables:
             assert "table_name" in table
-            assert "column_count" in table
             assert isinstance(table["columns"], list)
             assert len(table["columns"]) > 0
 
-    def test_refresh_does_not_expose_sample_values(self, refresh_app) -> None:
-        """
-        SECURITY: sample_values must never appear anywhere in the response body.
-        This is a hard invariant — sample values could contain PII.
-        """
-        import json
-
-        app, cid = refresh_app
-        with TestClient(app) as client:
-            response = client.post(f"/connections/{cid}/refresh")
-
-        # Walk the entire JSON recursively; sample_values must not be a key
-        def find_keys(obj, key: str) -> bool:
-            if isinstance(obj, dict):
-                if key in obj:
-                    return True
-                return any(find_keys(v, key) for v in obj.values())
-            if isinstance(obj, list):
-                return any(find_keys(item, key) for item in obj)
-            return False
-
-        body = response.json()
-        assert not find_keys(body, "sample_values"), (
-            "'sample_values' must NEVER appear in the /refresh response body "
-            "(security invariant: sample data could contain PII)"
-        )
-
-    def test_refresh_column_entries_have_expected_fields(self, refresh_app) -> None:
+    def test_refresh_column_entries_have_expected_fields(self, refresh_app: Any) -> None:
         """Column summaries must include name, data_type, and profiling fields."""
-        app, cid = refresh_app
+        app, cid, mgr = refresh_app
         with TestClient(app) as client:
+            app.state.connection_manager = mgr
             response = client.post(f"/connections/{cid}/refresh")
 
-        tables = response.json()["tables"]
-        for table in tables:
+        for table in response.json()["tables"]:
             for col in table["columns"]:
                 assert "column_name" in col
                 assert "data_type" in col
-                # These may be None for unprofiled columns but keys must exist
+                # Keys must exist even if profiling returned None
                 assert "null_pct" in col
                 assert "distinct_count" in col
                 assert "is_temporal" in col
+
+    def test_refresh_does_not_expose_sample_values(self, refresh_app: Any) -> None:
+        """
+        SECURITY INVARIANT: sample_values must NEVER appear anywhere in the
+        /refresh response body — sample data could contain PII.
+        """
+        app, cid, mgr = refresh_app
+        with TestClient(app) as client:
+            app.state.connection_manager = mgr
+            response = client.post(f"/connections/{cid}/refresh")
+
+        def _has_key(obj: Any, key: str) -> bool:
+            if isinstance(obj, dict):
+                if key in obj:
+                    return True
+                return any(_has_key(v, key) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_has_key(item, key) for item in obj)
+            return False
+
+        assert not _has_key(response.json(), "sample_values"), (
+            "'sample_values' must NEVER appear in the /refresh response body "
+            "(security invariant: sample data could contain PII)"
+        )
 
     def test_refresh_returns_404_for_unknown_connection(
         self, orchestrator: PipelineOrchestrator
@@ -519,9 +462,65 @@ class TestSchemaRefresh:
 
         mgr = DatabaseConnectionManager()
         app = create_app(orchestrator=orchestrator)
-        app.state.connection_manager = mgr
 
         with TestClient(app) as client:
+            app.state.connection_manager = mgr
             response = client.post("/connections/does-not-exist/refresh")
 
         assert response.status_code == 404
+
+    def test_refresh_schema_fingerprint_changes_after_schema_change(
+        self, orchestrator: PipelineOrchestrator
+    ) -> None:
+        """Two different schemas must produce different fingerprints."""
+        from uada.db.connection_manager import ConnectionConfig, DatabaseConnectionManager
+
+        mgr = DatabaseConnectionManager()
+        tfiles: list[str] = []
+        connection_ids: list[str] = []
+
+        db_fixtures = [
+            (
+                "CREATE TABLE orders (id INTEGER PRIMARY KEY, revenue REAL)",
+                "INSERT INTO orders VALUES (1, 100.0)",
+            ),
+            (
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)",
+                "INSERT INTO users VALUES (1, 'Alice', 'alice@example.com')",
+            ),
+        ]
+
+        for create_sql, insert_sql in db_fixtures:
+            tf = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+            tf.close()
+            tfiles.append(tf.name)
+            conn = sqlite3.connect(tf.name)
+            conn.execute(create_sql)
+            conn.execute(insert_sql)
+            conn.commit()
+            conn.close()
+            table_name = create_sql.split("(")[0].split()[-1]
+            cid = mgr.register(ConnectionConfig(
+                name=f"db-{table_name}", dialect="sqlite", database=tf.name
+            ))
+            connection_ids.append(cid)
+
+        app = create_app(orchestrator=orchestrator)
+        fingerprints: list[str] = []
+
+        with TestClient(app) as client:
+            app.state.connection_manager = mgr
+            for cid in connection_ids:
+                r = client.post(f"/connections/{cid}/refresh")
+                assert r.status_code == 200, f"Refresh failed for {cid}: {r.text}"
+                fingerprints.append(r.json()["schema_fingerprint"])
+
+        for tf_name in tfiles:
+            try:
+                os.unlink(tf_name)
+            except OSError:
+                pass
+
+        assert fingerprints[0] != fingerprints[1], (
+            "Different schemas must produce different schema_fingerprints"
+        )

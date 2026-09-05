@@ -1,0 +1,132 @@
+stateDiagram-v2
+    [*] --> Intake: POST /query
+
+    Intake --> SchemaLinking: session loaded
+
+    state SchemaLinking {
+        [*] --> VectorQuery
+        VectorQuery --> BM25Query
+        BM25Query --> RRFMerge
+        RRFMerge --> SecurityCheck
+        SecurityCheck --> [*]: SchemaContext ready
+    }
+
+    SchemaLinking --> IntentExtraction
+
+    state IntentExtraction {
+        [*] --> LLMCall1
+        LLMCall1 --> PydanticValidation
+        PydanticValidation --> CrossFieldCheck
+        CrossFieldCheck --> OutOfScope: OUT_OF_SCOPE / AMBIGUOUS
+        CrossFieldCheck --> [*]: AnalyticalIntent
+    }
+
+    OutOfScope --> ClarificationResponse
+    ClarificationResponse --> [*]
+
+    IntentExtraction --> QueryPlanning
+
+    state QueryPlanning {
+        [*] --> ResolveJoins
+        ResolveJoins --> ExpandMeasures
+        ExpandMeasures --> BuildTimeFilter
+        BuildTimeFilter --> ResolveFilters
+        ResolveFilters --> [*]: QueryPlan
+    }
+
+    QueryPlanning --> RetryLoop
+
+    state RetryLoop {
+        [*] --> SQLGeneration
+
+        state SQLGeneration {
+            [*] --> LLMCall2
+            LLMCall2 --> StripFences
+            StripFences --> [*]: raw SQL
+        }
+
+        SQLGeneration --> SQLValidation
+
+        state SQLValidation {
+            [*] --> ASTparse
+            ASTparse --> Rule1_SelectOnly
+            Rule1_SelectOnly --> SecurityRejected: fail
+            Rule1_SelectOnly --> Rule2_SingleStmt: pass
+            Rule2_SingleStmt --> SecurityRejected: fail
+            Rule2_SingleStmt --> Rule3_NoSysSchema: pass
+            Rule3_NoSysSchema --> SecurityRejected: fail
+            Rule3_NoSysSchema --> Rule4_TableAllowlist: pass
+            Rule4_TableAllowlist --> SecurityRejected: fail
+            Rule4_TableAllowlist --> Rule5_NoDangerFns: pass
+            Rule5_NoDangerFns --> SecurityRejected: fail
+            Rule5_NoDangerFns --> Rule6_SubqueryDepth: pass
+            Rule6_SubqueryDepth --> SecurityRejected: fail
+            Rule6_SubqueryDepth --> InjectLimit: pass
+            InjectLimit --> [*]: safe SQL
+        }
+
+        SecurityRejected --> [*]: HALT — no retry
+
+        SQLValidation --> Execution
+
+        state Execution {
+            [*] --> DBConnection
+            DBConnection --> RunQuery
+            RunQuery --> TimeoutCheck
+            TimeoutCheck --> QueryTimeout: timeout
+            TimeoutCheck --> FetchRows: ok
+            FetchRows --> TruncationCheck
+            TruncationCheck --> [*]: QueryExecutionResult
+        }
+
+        QueryTimeout --> [*]: HALT — no retry
+
+        Execution --> ExecutionError: QueryExecutionError
+        ExecutionError --> RepairHint
+        RepairHint --> SQLGeneration: retry with hint
+
+        Execution --> ResultAnalysis: success
+    }
+
+    state ResultAnalysis {
+        [*] --> PandasDF
+        PandasDF --> NumericSummaries
+        NumericSummaries --> TrendDetection
+        TrendDetection --> OutlierDetection
+        OutlierDetection --> NarrativeGen
+        NarrativeGen --> [*]: AnalysedResult
+    }
+
+    ResultAnalysis --> Visualization
+
+    state Visualization {
+        [*] --> DeterministicCheck
+        DeterministicCheck --> KPICard: single value
+        DeterministicCheck --> LineChart: TIME_SERIES
+        DeterministicCheck --> BarChart: RANKING
+        DeterministicCheck --> GroupedBar: COMPARISON
+        DeterministicCheck --> LLMFallback: else
+        LLMFallback --> LLMCall3
+        LLMCall3 --> ValidateSpec
+        KPICard --> [*]
+        LineChart --> [*]
+        BarChart --> [*]
+        GroupedBar --> [*]
+        ValidateSpec --> [*]
+    }
+
+    Visualization --> FollowUpGen
+
+    state FollowUpGen {
+        [*] --> DeterministicRules
+        DeterministicRules --> LLMEnrich: optional
+        LLMEnrich --> [*]: 3-5 suggestions
+        DeterministicRules --> [*]: 3-5 suggestions
+    }
+
+    FollowUpGen --> SaveSession
+    SaveSession --> AssembleResponse
+    AssembleResponse --> [*]: UADAResponse
+
+    SecurityRejected --> AssembleResponse: error response
+    QueryTimeout --> AssembleResponse: error response

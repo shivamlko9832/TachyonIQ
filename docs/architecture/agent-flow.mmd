@@ -1,0 +1,111 @@
+sequenceDiagram
+    actor User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant ORCH as Orchestrator
+    participant STORE as ConvStore
+    participant LINKER as SchemaLinker
+    participant INTENT as IntentExtractor<br/>(PydanticAI)
+    participant PLAN as QueryPlanner<br/>(Deterministic)
+    participant SQLGEN as SQLGenerator<br/>(PydanticAI)
+    participant VALID as SQLValidator<br/>(SQLGlot AST)
+    participant DB as DatabaseAdapter
+    participant ANAL as ResultAnalyser
+    participant VIZ as VizGenerator
+    participant FOLLOW as FollowUpEngine
+
+    User->>FE: "Show revenue by region, last quarter"
+    FE->>API: POST /query {question, session_id}
+    API->>ORCH: run(question, session_id)
+
+    ORCH->>STORE: get_or_create(session_id)
+    STORE-->>ORCH: ConversationState (turns, active_context)
+
+    Note over ORCH: Stage 1: Schema Linking
+    ORCH->>LINKER: link(question, scl_manager)
+    LINKER->>LINKER: ChromaDB query × 4 doctypes
+    LINKER->>LINKER: BM25 query × 4 doctypes
+    LINKER->>LINKER: RRF merge (k=60)
+    LINKER->>LINKER: Security re-check vs allowlist
+    LINKER-->>ORCH: SchemaContext {tables, metrics, glossary, examples}
+
+    Note over ORCH: Stage 2: Intent Extraction (LLM #1)
+    ORCH->>INTENT: extract(question, schema_ctx, edition_ctx)
+    INTENT->>INTENT: PydanticAI → LLM call
+    INTENT->>INTENT: Validate AnalyticalIntent cross-fields
+    INTENT-->>ORCH: AnalyticalIntent {AGGREGATION, measures=[revenue], dims=[region], time=LAST_QUARTER}
+
+    Note over ORCH: Stage 3: Query Planning (Deterministic)
+    ORCH->>PLAN: plan(intent, schema_ctx, conv_state)
+    PLAN->>PLAN: Resolve tables + joins
+    PLAN->>PLAN: Expand measures to SQL expressions
+    PLAN->>PLAN: Generate dialect time filters (PostgreSQL)
+    PLAN->>PLAN: Build ResolvedFilters
+    PLAN-->>ORCH: QueryPlan {dialect, tables, joins, measures, time_resolution}
+
+    loop Retry loop (max: llm_max_retries)
+        Note over ORCH: Stage 4: SQL Generation (LLM #2)
+        ORCH->>SQLGEN: generate(query_plan)
+        SQLGEN->>SQLGEN: PydanticAI → LLM call
+        SQLGEN->>SQLGEN: Strip code fences
+        SQLGEN-->>ORCH: raw SQL string
+
+        Note over ORCH,VALID: Stage 5: SQL Validation ★ SECURITY BOUNDARY
+        ORCH->>VALID: validate(sql, dialect)
+        VALID->>VALID: SQLGlot AST parse
+        VALID->>VALID: Rule 1: SELECT-only?
+        VALID->>VALID: Rule 2: Single statement?
+        VALID->>VALID: Rule 3: No system schemas?
+        VALID->>VALID: Rule 4: Tables in allowlist?
+        VALID->>VALID: Rule 5: No dangerous functions?
+        VALID->>VALID: Rule 6: Subquery depth ≤ max?
+
+        alt Security violation
+            VALID-->>ORCH: SecurityViolation
+            ORCH-->>API: UADAResponse {error: security_rejected}
+            Note over ORCH: EXIT — no retry
+        else Validation OK
+            VALID->>VALID: Inject LIMIT if missing
+            VALID-->>ORCH: ValidationResult.OK + safe_sql
+
+            Note over ORCH: Stage 6: Execution
+            ORCH->>DB: execute_query(safe_sql, timeout=30s, max_rows=1000)
+            alt Timeout
+                DB-->>ORCH: QueryTimeoutError
+                ORCH-->>API: UADAResponse {error: timeout}
+                Note over ORCH: EXIT — no retry
+            else Execution error
+                DB-->>ORCH: QueryExecutionError {repair_hint}
+                ORCH->>SQLGEN: repair(sql, repair_hint)
+                Note over ORCH: Loop back to Stage 4
+            else Success
+                DB-->>ORCH: QueryExecutionResult {columns, rows, is_truncated}
+            end
+        end
+    end
+
+    Note over ORCH: Stage 7: Result Analysis
+    ORCH->>ANAL: analyse(exec_result, intent)
+    ANAL->>ANAL: Pandas DataFrame
+    ANAL->>ANAL: Numeric summaries
+    ANAL->>ANAL: Trend detection
+    ANAL->>ANAL: Outlier detection (z-score > 3)
+    ANAL->>ANAL: Narrative generation
+    ANAL-->>ORCH: AnalysedResult {summaries, trend, outliers, narrative, key_finding}
+
+    Note over ORCH: Stage 8: Visualization
+    ORCH->>VIZ: generate(analysed_result, intent)
+    VIZ->>VIZ: Deterministic selection tree
+    alt LLM needed
+        VIZ->>VIZ: LLM call #3 (fallback)
+    end
+    VIZ-->>ORCH: VegaLiteSpec | VisualisationFallback
+
+    Note over ORCH: Stage 9: Follow-up Suggestions
+    ORCH->>FOLLOW: suggest(intent, analysed_result, conv_state)
+    FOLLOW-->>ORCH: list[str] 3-5 suggestions
+
+    ORCH->>STORE: save(turn, active_context)
+    ORCH-->>API: UADAResponse {intent, sql, result, viz, suggestions}
+    API-->>FE: JSON response
+    FE-->>User: Chart + insights + suggestion chips

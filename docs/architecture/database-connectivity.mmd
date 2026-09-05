@@ -1,0 +1,80 @@
+graph TB
+    subgraph UI_CONN["Connection Setup UI"]
+        FORM["Connection Form\nHost | Port | Database\nUser | Password | SSL\nDialect selector"]
+        WIZARD["4-State Wizard"]
+        STATE_TEST["1. TEST\nSELECT 1 + latency\nServer version"]
+        STATE_DISC["2. DISCOVER\nTable count | Column count\nFK relationships\nRow estimates"]
+        STATE_PROF["3. PROFILE\nnull% | distinct count\nmin/max/samples\nTemporal range"]
+        STATE_READY["4. READY\nSchema embedded\nSemantic catalog built\nAvailable for queries"]
+    end
+
+    FORM --> WIZARD
+    WIZARD --> STATE_TEST
+    STATE_TEST -->|success| STATE_DISC
+    STATE_DISC -->|success| STATE_PROF
+    STATE_PROF -->|success| STATE_READY
+
+    subgraph CONN_MGR["DatabaseConnectionManager"]
+        REGISTRY["Connection Registry\nconnection_id → adapter\nUser → connection bindings"]
+        POOL["SQLAlchemy Pool\nQueuePool (prod)\nStaticPool (SQLite)\nNullPool (serverless)"]
+        CRED_VAULT["Credential Store\nenv var / secret manager\nNEVER in logs or state"]
+    end
+
+    STATE_READY --> REGISTRY
+    REGISTRY --> POOL
+    POOL --> CRED_VAULT
+
+    subgraph ADAPTER_ABC["DatabaseAdapter ABC"]
+        A_TEST["test_connection() → bool\n+ write probe warning"]
+        A_EXEC["execute_query(sql, timeout, max_rows)\n→ QueryExecutionResult"]
+        A_SCHEMA["get_raw_schema()\n→ RawSchemaInfo + SHA-256 fingerprint"]
+        A_EXPLAIN["explain_query(sql) → str\ndialect-specific plan"]
+        A_DIALECT["dialect: str property"]
+    end
+
+    POOL --> ADAPTER_ABC
+
+    subgraph ADAPTERS["Concrete Adapters (SQLAlchemy Core 2.0)"]
+        direction LR
+        PG["PostgreSQL\npsycopg2 / asyncpg\nstatement_timeout\nEXPLAIN ANALYZE"]
+        MYSQL["MySQL\nmysqlclient / pymysql\nINIT_CONNECT timeout\nEXPLAIN"]
+        SQLITE["SQLite\nStaticPool\nset_progress_handler\nEXPLAIN QUERY PLAN"]
+        MSSQL["SQL Server\npyodbc / pymssql\nSET LOCK_TIMEOUT\nSET SHOWPLAN_TEXT ON"]
+        SNOWFLAKE["Snowflake ★ ADD\nsnowflake-sqlalchemy\nwarehouse | role | schema\nALTER SESSION timeout"]
+        BIGQUERY["BigQuery ★ ADD\nsqlalchemy-bigquery\nproject | dataset\nOAuth / service account\njob_timeout_ms"]
+        REDSHIFT["Redshift ★ ADD\nsqlalchemy-redshift\npsycopg2 driver\nstatement_timeout"]
+        ORACLE["Oracle ★ ADD\noracledb (thin mode)\nservice name | SID\nstatement_timeout"]
+        DUCKDB["DuckDB ★ ADD\nduckdb-engine\nfile or :memory:\nin-process OLAP"]
+    end
+
+    ADAPTER_ABC --> PG
+    ADAPTER_ABC --> MYSQL
+    ADAPTER_ABC --> SQLITE
+    ADAPTER_ABC --> MSSQL
+    ADAPTER_ABC --> SNOWFLAKE
+    ADAPTER_ABC --> BIGQUERY
+    ADAPTER_ABC --> REDSHIFT
+    ADAPTER_ABC --> ORACLE
+    ADAPTER_ABC --> DUCKDB
+
+    subgraph DIALECT_MAP["Dialect → SQLGlot Mapping"]
+        DM1["postgresql → postgres"]
+        DM2["mysql → mysql"]
+        DM3["sqlite → sqlite"]
+        DM4["mssql → tsql"]
+        DM5["snowflake → snowflake ★"]
+        DM6["bigquery → bigquery ★"]
+        DM7["redshift → postgres (compatible) ★"]
+    end
+
+    ADAPTERS --> DIALECT_MAP
+
+    subgraph SECURITY["Execution Security"]
+        S1["Read-only credentials\n(preferred — enforced at DB level)"]
+        S2["Write probe warning\n(test_connection detects write access)"]
+        S3["Statement timeout\n(dialect-specific, default 30s)"]
+        S4["Row limit\n(fetchmany + truncation flag)"]
+        S5["SQLValidator\n6 AST rules BEFORE execution"]
+    end
+
+    ADAPTER_ABC --- SECURITY

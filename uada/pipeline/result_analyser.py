@@ -18,10 +18,14 @@ from uada.models.intent import QuestionType
 from uada.models.result import (
     AnalysedResult,
     NumericSummary,
+    OlapInsights,
     Outlier,
     TrendAnalysis,
     TrendDirection,
 )
+
+# P3 analytics modules — lazy imports inside methods so app starts without them
+
 
 if TYPE_CHECKING:
     from uada.models.intent import AnalyticalIntent
@@ -59,6 +63,36 @@ class ResultAnalyser:
         narrative_insight = self._build_narrative(intent, df, numeric_summaries, trend_analysis)
         key_finding = self._build_key_finding(intent, df, numeric_summaries, trend_analysis)
 
+        # DuckDB OLAP enrichment (P2-4) — best-effort, never blocks the response
+        olap_insights: OlapInsights | None = None
+        if len(numeric_columns) >= 1 and result.row_count >= 3:
+            olap_insights = self._run_duckdb_olap(df, numeric_columns, intent)
+
+        # P3-1: Correlation Analysis — best-effort, never blocks the response
+        correlation_result = None
+        if result.row_count >= 10 and len(numeric_columns) >= 2:
+            try:
+                from uada.analytics.correlation import CorrelationAnalyser
+                correlation_result = CorrelationAnalyser().analyse(df, numeric_columns)
+            except Exception as _exc:
+                logger.debug("CorrelationAnalyser skipped: %s", _exc)
+
+        # P3-2: Anomaly Detection — best-effort, never blocks the response
+        anomaly_result = None
+        if result.row_count >= 10 and len(numeric_columns) >= 1:
+            try:
+                from uada.analytics.anomaly import AnomalyDetector
+                anomaly_result = AnomalyDetector().detect(df, numeric_columns)
+            except Exception as _exc:
+                logger.debug("AnomalyDetector skipped: %s", _exc)
+
+        # Richer deterministic narration (P2-2 — bullets, drivers, anomaly descriptions)
+        key_findings_bullets = self._build_findings_bullets(
+            intent, df, numeric_summaries, trend_analysis, outliers
+        )
+        drivers = self._build_drivers(intent, df, numeric_summaries, trend_analysis)
+        anomaly_descriptions = [o.description for o in outliers[:5]]
+
         analysed = AnalysedResult(
             query_result=result,
             numeric_summaries=numeric_summaries,
@@ -69,6 +103,12 @@ class ResultAnalyser:
             has_comparison=intent.question_type == QuestionType.COMPARISON,
             narrative_insight=narrative_insight,
             key_finding=key_finding,
+            key_findings_bullets=key_findings_bullets,
+            drivers=drivers,
+            anomaly_descriptions=anomaly_descriptions,
+            olap_insights=olap_insights,
+            correlation_result=correlation_result,
+            anomaly_result=anomaly_result,
         )
         logger.info(
             "Result analysed: %d numeric column(s), %d outlier(s), has_time_dimension=%s.",
@@ -320,6 +360,180 @@ class ResultAnalyser:
             return numeric_summaries[0]
         return None
 
+
+
+    # ── DuckDB OLAP (P2-4) ───────────────────────────────────────────────────
+
+    def _run_duckdb_olap(
+        self,
+        df: pd.DataFrame,
+        numeric_columns: list[str],
+        intent: AnalyticalIntent,
+    ) -> OlapInsights | None:
+        """
+        Run in-process OLAP queries against the result DataFrame via DuckDB.
+        Returns None if DuckDB is not installed or any error occurs — callers
+        must treat this as best-effort enrichment only.
+
+        Safety: operates on the already-fetched QueryResult DataFrame in memory.
+        No new database connections are opened; no SQL is sent to the user's DB.
+        """
+        try:
+            import duckdb  # noqa: PLC0415 — lazy import; not always installed
+
+            con = duckdb.connect(database=":memory:")
+            con.register("result_df", df)
+
+            correlations: dict[str, float] = {}
+            if len(numeric_columns) >= 2:
+                for i, col_a in enumerate(numeric_columns):
+                    for col_b in numeric_columns[i + 1:]:
+                        try:
+                            row = con.execute(
+                                f'SELECT CORR("{col_a}", "{col_b}") FROM result_df'
+                            ).fetchone()
+                            if row and row[0] is not None:
+                                correlations[f"{col_a}:{col_b}"] = round(float(row[0]), 4)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+            percentiles: dict[str, dict[str, float]] = {}
+            for col in numeric_columns[:3]:  # cap to avoid large payloads
+                try:
+                    row = con.execute(f"""
+                        SELECT
+                            PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY "{col}"),
+                            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY "{col}"),
+                            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY "{col}"),
+                            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY "{col}"),
+                            PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY "{col}"),
+                            PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY "{col}")
+                        FROM result_df
+                    """).fetchone()
+                    if row:
+                        labels = ["p10", "p25", "p50", "p75", "p90", "p99"]
+                        percentiles[col] = {
+                            label: round(float(v), 4)
+                            for label, v in zip(labels, row)
+                            if v is not None
+                        }
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # Top contributors: first dimension × first measure
+            top_contributors: list[dict[str, object]] = []
+            if intent.dimensions and intent.measures:
+                dim = intent.dimensions[0]
+                measure = intent.measures[0]
+                if dim in df.columns and measure in df.columns:
+                    try:
+                        rows = con.execute(f"""
+                            SELECT "{dim}", SUM("{measure}") AS total
+                            FROM result_df
+                            WHERE "{dim}" IS NOT NULL
+                            GROUP BY "{dim}"
+                            ORDER BY total DESC
+                            LIMIT 3
+                        """).fetchall()
+                        top_contributors = [
+                            {"dimension": r[0], "value": round(float(r[1]), 2)}
+                            for r in rows
+                        ]
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            con.close()
+            return OlapInsights(
+                correlations=correlations,
+                percentiles=percentiles,
+                top_contributors=top_contributors,
+            )
+
+        except ImportError:
+            logger.debug("DuckDB not installed — skipping in-process OLAP enrichment.")
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DuckDB OLAP enrichment failed (non-fatal): %s", exc)
+            return None
+
+    # ── Richer narration (P2-2) ──────────────────────────────────────────────
+
+    def _build_findings_bullets(
+        self,
+        intent: AnalyticalIntent,
+        df: pd.DataFrame,
+        numeric_summaries: list[NumericSummary],
+        trend_analysis: list[TrendAnalysis],
+        outliers: list[Outlier],
+    ) -> list[str]:
+        """Generate 3-5 factual bullet points from statistical summaries."""
+        bullets: list[str] = []
+
+        # Primary metric summary
+        for summary in numeric_summaries[:2]:
+            if summary.sum is not None:
+                bullets.append(
+                    f"{summary.column.replace('_', ' ').title()}: "
+                    f"total {_format_number(summary.sum)}, "
+                    f"avg {_format_number(summary.mean or 0)}, "
+                    f"range {_format_number(summary.min or 0)}–{_format_number(summary.max or 0)}."
+                )
+
+        # Trend bullets
+        for trend in trend_analysis[:2]:
+            if trend.change_pct is not None:
+                direction = "increased" if trend.change_pct > 0 else "decreased"
+                bullets.append(
+                    f"{trend.column.replace('_', ' ').title()} {direction} "
+                    f"{abs(trend.change_pct):.1f}% from start to end of period."
+                )
+
+        # Outlier bullet
+        if outliers:
+            top_outlier = max(outliers, key=lambda o: abs(o.z_score or 0))
+            bullets.append(
+                f"Notable outlier: {top_outlier.column} = {_format_number(top_outlier.value)} "
+                f"({abs(top_outlier.z_score or 0):.1f}σ from mean)."
+            )
+
+        # Row-count finding
+        if len(df) > 0:
+            bullets.append(f"Query returned {len(df):,} data point(s).")
+
+        return bullets[:5]
+
+    def _build_drivers(
+        self,
+        intent: AnalyticalIntent,
+        df: pd.DataFrame,
+        numeric_summaries: list[NumericSummary],
+        trend_analysis: list[TrendAnalysis],
+    ) -> list[str]:
+        """Generate plausible driver statements from intent + trend data."""
+        drivers: list[str] = []
+
+        for trend in trend_analysis:
+            if trend.direction.value in ("increasing", "decreasing"):
+                col = trend.column.replace("_", " ")
+                drivers.append(
+                    f"{col.title()} shows a {trend.direction.value} trend "
+                    f"({abs(trend.change_pct or 0):.1f}% change). "
+                    "Consider segmenting by dimension to identify the primary driver."
+                )
+
+        if intent.dimensions:
+            dim = intent.dimensions[0].replace("_", " ")
+            drivers.append(
+                f"Breakdown by '{dim}' may reveal which segment is driving overall performance."
+            )
+
+        if not drivers:
+            drivers.append(
+                "Insufficient trend data to identify specific drivers. "
+                "A time-series breakdown may surface contributing factors."
+            )
+
+        return drivers[:3]
 
 _TREND_VERBS: dict[TrendDirection, str] = {
     TrendDirection.INCREASING: "increased",

@@ -188,6 +188,35 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"))
     log_level: str = Field(default="INFO")
 
+    # ── Redis (optional — ConversationStore falls back to in-memory if unset) ──
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis connection URL, e.g. redis://localhost:6379/0. "
+                    "If unset, ConversationStore uses an in-memory dict (POC mode).",
+    )
+    redis_ttl_seconds: int = Field(
+        default=86400,
+        description="Session TTL in Redis (seconds). Default 24 h.",
+    )
+
+    # ── RBAC / JWT (optional — disabled when jwt_secret_key is None) ──────────
+    jwt_secret_key: SecretStr | None = Field(
+        default=None,
+        description="Secret for HS256 JWT verification. If None, JWT RBAC is disabled.",
+    )
+    jwt_algorithm: str = Field(default="HS256")
+    rbac_enabled: bool = Field(
+        default=False,
+        description="Enable role-based access control (requires jwt_secret_key).",
+    )
+
+    # ── Audit logging ─────────────────────────────────────────────────────────
+    audit_log_path: Path | None = Field(
+        default=None,
+        description="Path for the structured audit JSONL log. "
+                    "If None, audit records are emitted to the application logger only.",
+    )
+
     @field_validator("llm_model")
     @classmethod
     def validate_llm_model(cls, v: str) -> str:

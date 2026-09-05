@@ -240,11 +240,163 @@ def _tsql_period_filter(column: str, period: RelativePeriod, count: int | None) 
     return templates[period]
 
 
+
+def _duckdb_period_filter(column: str, period: RelativePeriod, count: int | None) -> str:
+    # DuckDB follows PostgreSQL syntax almost exactly; DATE_TRUNC + INTERVAL work the same.
+    if period == RelativePeriod.LAST_N_MONTHS:
+        return f"{column} >= NOW() - INTERVAL '{count} months'"
+    if period == RelativePeriod.LAST_N_DAYS:
+        return f"{column} >= NOW() - INTERVAL '{count} days'"
+
+    templates: dict[RelativePeriod, str] = {
+        RelativePeriod.TODAY: (
+            f"{column} >= CURRENT_DATE AND {column} < CURRENT_DATE + INTERVAL '1 day'"
+        ),
+        RelativePeriod.YESTERDAY: (
+            f"{column} >= CURRENT_DATE - INTERVAL '1 day' AND {column} < CURRENT_DATE"
+        ),
+        RelativePeriod.THIS_WEEK: f"{column} >= DATE_TRUNC('week', NOW())",
+        RelativePeriod.LAST_WEEK: (
+            f"{column} >= DATE_TRUNC('week', NOW() - INTERVAL '1 week') "
+            f"AND {column} < DATE_TRUNC('week', NOW())"
+        ),
+        RelativePeriod.THIS_MONTH: f"{column} >= DATE_TRUNC('month', NOW())",
+        RelativePeriod.LAST_MONTH: (
+            f"{column} >= DATE_TRUNC('month', NOW() - INTERVAL '1 month') "
+            f"AND {column} < DATE_TRUNC('month', NOW())"
+        ),
+        RelativePeriod.THIS_QUARTER: f"{column} >= DATE_TRUNC('quarter', NOW())",
+        RelativePeriod.LAST_QUARTER: (
+            f"{column} >= DATE_TRUNC('quarter', NOW() - INTERVAL '3 months') "
+            f"AND {column} < DATE_TRUNC('quarter', NOW())"
+        ),
+        RelativePeriod.THIS_YEAR: f"{column} >= DATE_TRUNC('year', NOW())",
+        RelativePeriod.LAST_YEAR: (
+            f"{column} >= DATE_TRUNC('year', NOW() - INTERVAL '1 year') "
+            f"AND {column} < DATE_TRUNC('year', NOW())"
+        ),
+        RelativePeriod.LAST_7_DAYS: f"{column} >= NOW() - INTERVAL '7 days'",
+        RelativePeriod.LAST_30_DAYS: f"{column} >= NOW() - INTERVAL '30 days'",
+        RelativePeriod.LAST_90_DAYS: f"{column} >= NOW() - INTERVAL '90 days'",
+        RelativePeriod.LAST_12_MONTHS: f"{column} >= NOW() - INTERVAL '12 months'",
+    }
+    return templates[period]
+
+
+def _snowflake_period_filter(column: str, period: RelativePeriod, count: int | None) -> str:
+    # Snowflake uses DATEADD / DATE_TRUNC with unit as first string arg.
+    if period == RelativePeriod.LAST_N_MONTHS:
+        return f"{column} >= DATEADD(month, -{count}, CURRENT_TIMESTAMP())"
+    if period == RelativePeriod.LAST_N_DAYS:
+        return f"{column} >= DATEADD(day, -{count}, CURRENT_TIMESTAMP())"
+
+    week_start = "DATE_TRUNC('week', CURRENT_DATE())"
+    month_start = "DATE_TRUNC('month', CURRENT_DATE())"
+    quarter_start = "DATE_TRUNC('quarter', CURRENT_DATE())"
+    year_start = "DATE_TRUNC('year', CURRENT_DATE())"
+
+    templates: dict[RelativePeriod, str] = {
+        RelativePeriod.TODAY: f"{column} >= CURRENT_DATE()",
+        RelativePeriod.YESTERDAY: (
+            f"{column} >= DATEADD(day, -1, CURRENT_DATE()) "
+            f"AND {column} < CURRENT_DATE()"
+        ),
+        RelativePeriod.THIS_WEEK: f"{column} >= {week_start}",
+        RelativePeriod.LAST_WEEK: (
+            f"{column} >= DATEADD(week, -1, {week_start}) "
+            f"AND {column} < {week_start}"
+        ),
+        RelativePeriod.THIS_MONTH: f"{column} >= {month_start}",
+        RelativePeriod.LAST_MONTH: (
+            f"{column} >= DATEADD(month, -1, {month_start}) "
+            f"AND {column} < {month_start}"
+        ),
+        RelativePeriod.THIS_QUARTER: f"{column} >= {quarter_start}",
+        RelativePeriod.LAST_QUARTER: (
+            f"{column} >= DATEADD(month, -3, {quarter_start}) "
+            f"AND {column} < {quarter_start}"
+        ),
+        RelativePeriod.THIS_YEAR: f"{column} >= {year_start}",
+        RelativePeriod.LAST_YEAR: (
+            f"{column} >= DATEADD(year, -1, {year_start}) "
+            f"AND {column} < {year_start}"
+        ),
+        RelativePeriod.LAST_7_DAYS: f"{column} >= DATEADD(day, -7, CURRENT_TIMESTAMP())",
+        RelativePeriod.LAST_30_DAYS: f"{column} >= DATEADD(day, -30, CURRENT_TIMESTAMP())",
+        RelativePeriod.LAST_90_DAYS: f"{column} >= DATEADD(day, -90, CURRENT_TIMESTAMP())",
+        RelativePeriod.LAST_12_MONTHS: f"{column} >= DATEADD(month, -12, CURRENT_TIMESTAMP())",
+    }
+    return templates[period]
+
+
+def _bigquery_period_filter(column: str, period: RelativePeriod, count: int | None) -> str:
+    # BigQuery uses DATE_TRUNC(date_expr, granularity) and DATE_SUB / TIMESTAMP_SUB.
+    # We emit DATE_SUB on CURRENT_DATE() for rolling windows and DATE_TRUNC for
+    # calendar-aligned boundaries.  BigQuery is case-sensitive on function names
+    # (they are all UPPERCASE per convention).
+    if period == RelativePeriod.LAST_N_MONTHS:
+        return f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL {count} MONTH)"
+    if period == RelativePeriod.LAST_N_DAYS:
+        return f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL {count} DAY)"
+
+    templates: dict[RelativePeriod, str] = {
+        RelativePeriod.TODAY: f"{column} >= CURRENT_DATE()",
+        RelativePeriod.YESTERDAY: (
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) "
+            f"AND {column} < CURRENT_DATE()"
+        ),
+        RelativePeriod.THIS_WEEK: (
+            f"{column} >= DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY))"
+        ),
+        RelativePeriod.LAST_WEEK: (
+            f"{column} >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY)), INTERVAL 1 WEEK) "
+            f"AND {column} < DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY))"
+        ),
+        RelativePeriod.THIS_MONTH: (
+            f"{column} >= DATE_TRUNC(CURRENT_DATE(), MONTH)"
+        ),
+        RelativePeriod.LAST_MONTH: (
+            f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH) "
+            f"AND {column} < DATE_TRUNC(CURRENT_DATE(), MONTH)"
+        ),
+        RelativePeriod.THIS_QUARTER: (
+            f"{column} >= DATE_TRUNC(CURRENT_DATE(), QUARTER)"
+        ),
+        RelativePeriod.LAST_QUARTER: (
+            f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 QUARTER), QUARTER) "
+            f"AND {column} < DATE_TRUNC(CURRENT_DATE(), QUARTER)"
+        ),
+        RelativePeriod.THIS_YEAR: (
+            f"{column} >= DATE_TRUNC(CURRENT_DATE(), YEAR)"
+        ),
+        RelativePeriod.LAST_YEAR: (
+            f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), YEAR) "
+            f"AND {column} < DATE_TRUNC(CURRENT_DATE(), YEAR)"
+        ),
+        RelativePeriod.LAST_7_DAYS: (
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
+        ),
+        RelativePeriod.LAST_30_DAYS: (
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"
+        ),
+        RelativePeriod.LAST_90_DAYS: (
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)"
+        ),
+        RelativePeriod.LAST_12_MONTHS: (
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)"
+        ),
+    }
+    return templates[period]
+
+
 _PERIOD_FILTER_FUNCS = {
     SQLDialect.POSTGRESQL: _postgres_period_filter,
     SQLDialect.MYSQL: _mysql_period_filter,
     SQLDialect.SQLITE: _sqlite_period_filter,
     SQLDialect.TSQL: _tsql_period_filter,
+    SQLDialect.DUCKDB: _duckdb_period_filter,
+    SQLDialect.SNOWFLAKE: _snowflake_period_filter,
+    SQLDialect.BIGQUERY: _bigquery_period_filter,
 }
 
 
@@ -296,11 +448,45 @@ def _tsql_bucket(column: str, bucket: TimeBucket) -> str:
     return f"{formats[bucket]} AS period"
 
 
+
+
+def _duckdb_bucket(column: str, bucket: TimeBucket) -> str:
+    # DuckDB DATE_TRUNC uses the same unit strings as PostgreSQL.
+    return f"DATE_TRUNC('{bucket.value}', {column}) AS period"
+
+
+def _snowflake_bucket(column: str, bucket: TimeBucket) -> str:
+    # Snowflake DATE_TRUNC: DATE_TRUNC('unit', expr).
+    # QUARTER is supported; HOUR requires TIMESTAMP input.
+    return f"DATE_TRUNC('{bucket.value}', {column}) AS period"
+
+
+def _bigquery_bucket(column: str, bucket: TimeBucket) -> str:
+    # BigQuery DATE_TRUNC(date_expr, granularity) — granularity is an unquoted keyword.
+    # WEEK → WEEK(MONDAY) for ISO-week alignment.
+    bq_unit: dict[TimeBucket, str] = {
+        TimeBucket.HOUR: "HOUR",      # requires TIMESTAMP_TRUNC for TIMESTAMP cols
+        TimeBucket.DAY: "DAY",
+        TimeBucket.WEEK: "WEEK(MONDAY)",
+        TimeBucket.MONTH: "MONTH",
+        TimeBucket.QUARTER: "QUARTER",
+        TimeBucket.YEAR: "YEAR",
+    }
+    unit = bq_unit[bucket]
+    if bucket == TimeBucket.HOUR:
+        # TIMESTAMP_TRUNC is correct for TIMESTAMP columns; DATE_TRUNC for DATE.
+        # We emit TIMESTAMP_TRUNC as the safer choice for analytics columns.
+        return f"TIMESTAMP_TRUNC({column}, {unit}) AS period"
+    return f"DATE_TRUNC({column}, {unit}) AS period"
+
 _BUCKET_FUNCS = {
     SQLDialect.POSTGRESQL: _postgres_bucket,
     SQLDialect.MYSQL: _mysql_bucket,
     SQLDialect.SQLITE: _sqlite_bucket,
     SQLDialect.TSQL: _tsql_bucket,
+    SQLDialect.DUCKDB: _duckdb_bucket,
+    SQLDialect.SNOWFLAKE: _snowflake_bucket,
+    SQLDialect.BIGQUERY: _bigquery_bucket,
 }
 
 

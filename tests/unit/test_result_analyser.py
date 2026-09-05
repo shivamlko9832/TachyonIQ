@@ -327,3 +327,268 @@ class TestKeyFindingFallback:
         intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
         analysed = analyser.analyse(result, intent)
         assert analysed.key_finding == "revenue: 300.00"
+
+
+# ── P2-4: DuckDB OLAP Enrichment ─────────────────────────────────────────────
+
+class TestDuckDBOlap:
+    """
+    Tests for the _run_duckdb_olap path in ResultAnalyser.
+
+    DuckDB is only called when row_count >= 3 and there is at least one
+    numeric column; all tests satisfy those preconditions.
+    """
+
+    duckdb = pytest.importorskip("duckdb")
+
+    # ── correlations ─────────────────────────────────────────────────────────
+
+    def test_perfect_positive_correlation(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="x", data_type="float"),
+                ColumnMeta(name="y", data_type="float"),
+            ],
+            rows=[[1.0, 2.0], [2.0, 4.0], [3.0, 6.0], [4.0, 8.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["x", "y"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        assert "x:y" in analysed.olap_insights.correlations
+        corr = analysed.olap_insights.correlations["x:y"]
+        assert corr == pytest.approx(1.0, abs=0.001)
+
+    def test_perfect_negative_correlation(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="sales", data_type="float"),
+                ColumnMeta(name="returns", data_type="float"),
+            ],
+            rows=[[10.0, 1.0], [8.0, 3.0], [6.0, 5.0], [4.0, 7.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["sales", "returns"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        corr = analysed.olap_insights.correlations.get("sales:returns")
+        assert corr is not None
+        assert corr == pytest.approx(-1.0, abs=0.001)
+
+    def test_no_correlation_with_single_numeric_column(self, analyser: ResultAnalyser) -> None:
+        """correlations dict should be empty when only one numeric column."""
+        result = _result(
+            columns=[
+                ColumnMeta(name="revenue", data_type="float"),
+                ColumnMeta(name="region", data_type="str"),
+            ],
+            rows=[[100.0, "A"], [200.0, "B"], [300.0, "C"]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        assert analysed.olap_insights.correlations == {}
+
+    # ── percentiles ──────────────────────────────────────────────────────────
+
+    def test_percentiles_populated_for_numeric_column(self, analyser: ResultAnalyser) -> None:
+        rows = [[float(v)] for v in range(1, 11)]  # 10 evenly spaced values
+        result = _result(
+            columns=[ColumnMeta(name="score", data_type="float")],
+            rows=rows,
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["score"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        pcts = analysed.olap_insights.percentiles
+        assert "score" in pcts
+        score_pcts = pcts["score"]
+        expected_keys = {"p10", "p25", "p50", "p75", "p90", "p99"}
+        assert set(score_pcts.keys()) == expected_keys
+        # Monotonicity: percentiles should be non-decreasing
+        ordered = [score_pcts[k] for k in ("p10", "p25", "p50", "p75", "p90", "p99")]
+        for a, b in zip(ordered, ordered[1:]):
+            assert a <= b
+
+    def test_percentile_median_matches_expected_value(self, analyser: ResultAnalyser) -> None:
+        # 1..9 — median is 5
+        rows = [[float(v)] for v in range(1, 10)]
+        result = _result(
+            columns=[ColumnMeta(name="amount", data_type="float")],
+            rows=rows,
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["amount"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        p50 = analysed.olap_insights.percentiles["amount"]["p50"]
+        assert p50 == pytest.approx(5.0, abs=0.01)
+
+    # ── top_contributors ─────────────────────────────────────────────────────
+
+    def test_top_contributors_ranked_by_measure(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="region", data_type="str"),
+                ColumnMeta(name="revenue", data_type="float"),
+            ],
+            rows=[
+                ["West", 500.0],
+                ["East", 300.0],
+                ["North", 100.0],
+                ["South", 50.0],
+            ],
+        )
+        intent = _intent(
+            QuestionType.AGGREGATION,
+            measures=["revenue"],
+            dimensions=["region"],
+        )
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        top = analysed.olap_insights.top_contributors
+        assert len(top) == 3
+        assert top[0]["dimension"] == "West"
+        assert top[0]["value"] == pytest.approx(500.0)
+        assert top[1]["dimension"] == "East"
+
+    def test_top_contributors_empty_when_no_dimensions(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[ColumnMeta(name="revenue", data_type="float")],
+            rows=[[100.0], [200.0], [300.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.olap_insights is not None
+        assert analysed.olap_insights.top_contributors == []
+
+    # ── no OLAP when too few rows ─────────────────────────────────────────────
+
+    def test_olap_skipped_for_fewer_than_3_rows(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="a", data_type="float"),
+                ColumnMeta(name="b", data_type="float"),
+            ],
+            rows=[[1.0, 2.0], [3.0, 4.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["a", "b"])
+        analysed = analyser.analyse(result, intent)
+        assert analysed.olap_insights is None
+
+    # ── key_findings_bullets ─────────────────────────────────────────────────
+
+    def test_key_findings_bullets_non_empty_for_multi_row_result(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[ColumnMeta(name="revenue", data_type="float")],
+            rows=[[100.0], [200.0], [300.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert len(analysed.key_findings_bullets) > 0
+        # At minimum, there should be a row-count bullet
+        combined = " ".join(analysed.key_findings_bullets)
+        assert "3" in combined or "data point" in combined
+
+    def test_key_findings_bullets_include_metric_summary(self, analyser: ResultAnalyser) -> None:
+        result = _result(
+            columns=[ColumnMeta(name="revenue", data_type="float")],
+            rows=[[100.0], [200.0], [300.0], [400.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        combined = " ".join(analysed.key_findings_bullets).lower()
+        assert "revenue" in combined
+
+    def test_key_findings_bullets_include_trend_for_time_series(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="period", data_type="str"),
+                ColumnMeta(name="revenue", data_type="float"),
+            ],
+            rows=[["2026-01", 100.0], ["2026-02", 150.0], ["2026-03", 200.0]],
+        )
+        intent = _intent(QuestionType.TIME_SERIES, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert len(analysed.key_findings_bullets) > 0
+        combined = " ".join(analysed.key_findings_bullets).lower()
+        # Should contain a trend description
+        assert any(word in combined for word in ("increased", "decreased", "trend", "revenue"))
+
+    # ── drivers ──────────────────────────────────────────────────────────────
+
+    def test_drivers_non_empty_for_time_series_with_trend(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="period", data_type="str"),
+                ColumnMeta(name="revenue", data_type="float"),
+            ],
+            rows=[["2026-01", 100.0], ["2026-02", 200.0], ["2026-03", 400.0]],
+        )
+        intent = _intent(QuestionType.TIME_SERIES, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert len(analysed.drivers) > 0
+        # Driver should mention the trend direction
+        combined = " ".join(analysed.drivers).lower()
+        assert "increasing" in combined or "revenue" in combined
+
+    def test_drivers_include_dimension_segmentation_hint(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="region", data_type="str"),
+                ColumnMeta(name="revenue", data_type="float"),
+            ],
+            rows=[["West", 100.0], ["East", 200.0], ["North", 300.0]],
+        )
+        intent = _intent(
+            QuestionType.AGGREGATION, measures=["revenue"], dimensions=["region"]
+        )
+        analysed = analyser.analyse(result, intent)
+
+        combined = " ".join(analysed.drivers).lower()
+        assert "region" in combined
+
+    # ── anomaly_descriptions ─────────────────────────────────────────────────
+
+    def test_anomaly_descriptions_populated_from_outliers(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        normal_rows: list[list[object]] = [[100.0] for _ in range(20)]
+        result = _result(
+            columns=[ColumnMeta(name="revenue", data_type="float")],
+            rows=[*normal_rows, [100000.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert len(analysed.anomaly_descriptions) > 0
+        # The description should reference the column
+        assert any("revenue" in desc.lower() for desc in analysed.anomaly_descriptions)
+
+    def test_anomaly_descriptions_empty_when_no_outliers(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[ColumnMeta(name="revenue", data_type="float")],
+            rows=[[100.0], [101.0], [99.0], [100.5], [98.0]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["revenue"])
+        analysed = analyser.analyse(result, intent)
+
+        assert analysed.anomaly_descriptions == []
