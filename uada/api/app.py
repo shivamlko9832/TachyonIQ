@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from uada.api.middleware.auth import AuthMiddleware
-from uada.api.routes import health, query, session
+from uada.api.routes import health, query, session, ui
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -138,6 +138,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(query.router)
     app.include_router(session.router)
+    app.include_router(ui.router)
     return app
 
 
