@@ -46,6 +46,10 @@ if TYPE_CHECKING:
     from uada.pipeline.sql_generator import SQLGenerator
     from uada.pipeline.sql_validator import SQLValidator, ValidationResult
     from uada.pipeline.followup_engine import FollowUpEngine
+    from uada.pipeline.complexity_router import ComplexityRouter
+    from uada.pipeline.investigation_agent import InvestigationAgent, SecurityViolation
+    from uada.pipeline.result_critic import ResultCritic
+    from uada.pipeline.replanner import Replanner
     from uada.pipeline.viz_generator import VisualisationGenerator
     from uada.scl.manager import SCLManager
     from uada.observability.audit import AuditLogger
@@ -78,6 +82,9 @@ class PipelineOrchestrator:
         followup_engine: FollowUpEngine | None = None,
         audit_logger: AuditLogger | None = None,
         insight_generator: object | None = None,
+        complexity_router: "ComplexityRouter | None" = None,
+        result_critic: "ResultCritic | None" = None,
+        replanner: "Replanner | None" = None,
     ) -> None:
         self._db_adapter = db_adapter
         self._scl_manager = scl_manager
@@ -93,6 +100,10 @@ class PipelineOrchestrator:
         self._followup_engine = followup_engine
         self._audit_logger = audit_logger
         self._insight_generator = insight_generator  # P4-A-3: optional LLM insight step
+        self._complexity_router = complexity_router   # Step 2: optional tier classifier
+        self._investigation_agent: "InvestigationAgent | None" = None  # Step 3: set after init
+        self._result_critic: "ResultCritic | None" = result_critic       # Step 5: deterministic scorer
+        self._replanner: "Replanner | None" = replanner                   # Step 6: deterministic plan mutator
 
     @property
     def db_adapter(self) -> DatabaseAdapter:
@@ -103,6 +114,17 @@ class PipelineOrchestrator:
     def conversation_store(self) -> ConversationStore:
         """The conversation session store. Exposed for session management endpoints."""
         return self._conversation_store
+
+    def attach_investigation_agent(self, agent: "InvestigationAgent") -> None:
+        """
+        Attach an InvestigationAgent after construction.
+
+        Called by app.py after the orchestrator is built, so that the agent's
+        ``sql_executor`` closure can capture ``self._execute_sql_for_investigation``.
+        The parameter is typed under TYPE_CHECKING to avoid a circular import at
+        module load time.
+        """
+        self._investigation_agent = agent
 
     async def run(self, question: str, session_id: str, *, user_id: str | None = None) -> UADAResponse:
         """Run the full pipeline for `question` and return a UADAResponse."""
@@ -133,6 +155,84 @@ class PipelineOrchestrator:
                 turn = self._terminal_turn(turn_id, question, intent, response.error)
                 return await self._save_and_return(state, turn, None, response, question=question, user_id=user_id)
 
+            # Step 2: Complexity Router — classify before planning
+            _complexity_tier: str | None = None
+            if self._complexity_router is not None:
+                try:
+                    _schema_summary = ", ".join(
+                        f"{t.table_name}({len(t.columns)} cols)"
+                        if hasattr(t, "columns") else t.table_name
+                        for t in schema_ctx.tables
+                    ) or "unknown"
+                    _cd = await self._complexity_router.classify(
+                        question=question,
+                        schema_summary=_schema_summary,
+                        intent_type=intent.question_type.value,
+                    )
+                    _complexity_tier = _cd.tier.value
+                    span_complexity = _tracer.start_as_current_span("complexity_routing")
+                    with span_complexity as _cs:
+                        _cs.set_attribute("complexity_tier", _complexity_tier)
+                        _cs.set_attribute("estimated_joins", _cd.estimated_join_count)
+                        _cs.set_attribute("requires_window", _cd.requires_window_function)
+                except Exception as _cr_exc:  # noqa: BLE001
+                    logger.warning("ComplexityRouter skipped: %s", _cr_exc)
+
+            # Step 3: Investigation Agent — branch for COMPLEX / VERY_COMPLEX
+            if (
+                _complexity_tier in ("complex", "very_complex")
+                and self._investigation_agent is not None
+            ):
+                _inv_schema_summary = ", ".join(
+                    f"{t.table_name}({len(t.columns)} cols)"
+                    if hasattr(t, "columns") else t.table_name
+                    for t in schema_ctx.tables
+                ) or "unknown"
+                self._investigation_agent.set_schema_summary(_inv_schema_summary)
+
+                with _tracer.start_as_current_span("investigation_agent") as _inv_span:
+                    _inv_span.set_attribute("complexity_tier", _complexity_tier or "")
+                    _inv_result = await self._investigation_agent.run(
+                        question=question,
+                        intent_type=intent.question_type.value,
+                        complexity_tier=_complexity_tier,
+                    )
+                    _inv_span.set_attribute("investigation_state", _inv_result.state.value)
+                    _inv_span.set_attribute("investigation_steps", _inv_result.steps_taken)
+                    _inv_span.set_attribute("investigation_confidence", _inv_result.confidence)
+
+                _inv_answer = (
+                    _inv_result.synthesized_answer
+                    or _inv_result.escalation_reason
+                    or "Investigation could not produce a complete answer."
+                )
+                _inv_evidence_nodes = [
+                    f"{e.get('task_id', '?')}: {e.get('summary', '')}"
+                    for e in _inv_result.evidence
+                ]
+                response = UADAResponse(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    timestamp=datetime.now(tz=UTC),
+                    answer=_inv_answer,
+                    question_type=intent.question_type.value,
+                    complexity_tier=_complexity_tier,
+                    investigation_steps=_inv_result.steps_taken,
+                    evidence_nodes=_inv_evidence_nodes,
+                    pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
+                )
+                turn = ConversationTurn(
+                    turn_id=turn_id,
+                    timestamp=response.timestamp,
+                    user_question=question,
+                    status=TurnStatus.SUCCESS if _inv_result.synthesized_answer else TurnStatus.ERROR,
+                    resolved_intent=intent,
+                    result_summary=_inv_answer[:200],
+                )
+                return await self._save_and_return(
+                    state, turn, None, response, question=question, user_id=user_id
+                )
+
             stage = PipelineStage.QUERY_PLANNING
             with _tracer.start_as_current_span("query_planning") as span:
                 plan = self._query_planner.plan(intent, schema_ctx)
@@ -143,16 +243,68 @@ class PipelineOrchestrator:
             stage = PipelineStage.SQL_GENERATION
             with _tracer.start_as_current_span("sql_generation") as span:
                 span.set_attribute("attempt_number", 1)
-                sql = await self._sql_generator.generate(plan)
+                sql = await self._sql_generator.generate(
+                    plan, complexity_tier=_complexity_tier
+                )
 
             stage = PipelineStage.SQL_VALIDATION
             outcome = await self._validate_and_execute(
-                sql, plan, session_id, turn_id, start_time
+                sql, plan, session_id, turn_id, start_time,
+                complexity_tier=_complexity_tier,
             )
             if isinstance(outcome, UADAResponse):
                 turn = self._terminal_turn(turn_id, question, intent, outcome.error)
                 return await self._save_and_return(state, turn, None, outcome, question=question, user_id=user_id)
             normalised_sql, raw_result = outcome
+
+            # Step 5: deterministic ResultCritic — score before insight generation
+            _critic_result = None
+            if self._result_critic is not None:
+                with _tracer.start_as_current_span("result_critique") as _rc_span:
+                    _critic_result = self._result_critic.critique(
+                        raw_result, plan, intent_type=intent.question_type.value
+                    )
+                    _rc_span.set_attribute("critic_score", _critic_result.score)
+                    _rc_span.set_attribute("is_sufficient", _critic_result.is_sufficient)
+
+            # Step 6: Replanner — single deterministic retry on failed critique
+            if (
+                _critic_result is not None
+                and not _critic_result.is_sufficient
+                and self._replanner is not None
+            ):
+                with _tracer.start_as_current_span("replan") as _rp_span:
+                    _replan_result = self._replanner.replan(_critic_result, plan)
+                    _rp_span.set_attribute("did_replan", _replan_result.did_replan)
+                    _rp_span.set_attribute("replan_applied", len(_replan_result.applied))
+                if _replan_result.did_replan:
+                    logger.info(
+                        "Replanner applied %d mutation(s); retrying SQL generation.",
+                        len(_replan_result.applied),
+                    )
+                    plan = _replan_result.plan
+                    _retry_sql = await self._sql_generator.generate(
+                        plan, complexity_tier=_complexity_tier
+                    )
+                    _retry_outcome = await self._validate_and_execute(
+                        _retry_sql, plan, session_id, turn_id, start_time,
+                        complexity_tier=_complexity_tier,
+                    )
+                    if not isinstance(_retry_outcome, UADAResponse):
+                        normalised_sql, raw_result = _retry_outcome
+                        if self._result_critic is not None:
+                            with _tracer.start_as_current_span("result_critique_retry") as _rc2:
+                                _critic_result = self._result_critic.critique(
+                                    raw_result, plan,
+                                    intent_type=intent.question_type.value,
+                                )
+                                _rc2.set_attribute("critic_score", _critic_result.score)
+                                _rc2.set_attribute("is_sufficient", _critic_result.is_sufficient)
+                    else:
+                        logger.warning(
+                            "Replanner retry failed at validation/execution; "
+                            "proceeding with original result."
+                        )
 
             stage = PipelineStage.RESULT_ANALYSIS
             query_result = self._to_query_result(raw_result, normalised_sql, plan)
@@ -272,7 +424,9 @@ class PipelineOrchestrator:
                 anomaly_descriptions=analysed.anomaly_descriptions,
                 suggested_questions=suggested_questions,
                 question_type=intent.question_type.value,
+                complexity_tier=_complexity_tier,
                 tables_used=tables_used,
+                critic_score=_critic_result.score if _critic_result is not None else None,
                 pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
                 correlation_result=analysed.correlation_result,
                 anomaly_result=analysed.anomaly_result,
@@ -326,6 +480,49 @@ class PipelineOrchestrator:
 
     # ── SQL generation / validation / execution loop ────────────────────────
 
+    async def _execute_sql_for_investigation(
+        self,
+        sql: str,
+        description: str,
+    ) -> "tuple[str, QueryExecutionResult]":
+        """
+        Validate then execute SQL on behalf of InvestigationAgent.
+
+        CRITICAL INVARIANT: SQLValidator.validate() runs here, before every
+        execution attempt, exactly as in _validate_and_execute().  A security
+        violation raises SecurityViolation immediately — no retry — so that the
+        investigation state machine transitions to FAIL rather than attempting
+        the query.  This method is the sole SQL execution path for the agent;
+        it never bypasses the validator.
+        """
+        from uada.pipeline.investigation_agent import SecurityViolation as _SV
+
+        dialect = self._scl_manager.scl.database.dialect.value
+
+        with _tracer.start_as_current_span("inv_sql_validation") as _span:
+            validation = self._validator.validate(sql, dialect=dialect)
+            _span.set_attribute("is_safe", validation.is_safe)
+            if not validation.is_safe:
+                _violation_types = [v.violation_type.value for v in validation.violations]
+                _span.set_attribute("violation_types", str(_violation_types))
+                # NEVER log SQL text — only violation type codes
+                logger.error(
+                    "Investigation SQL security violation (dialect=%s): %s",
+                    dialect, _violation_types,
+                )
+                raise _SV(f"SQL security violation: {_violation_types}")
+
+        normalised = validation.normalised_sql or sql
+        with _tracer.start_as_current_span("inv_query_execution") as _span:
+            raw_result = self._db_adapter.execute_query(
+                normalised,
+                timeout_seconds=self._settings.db_query_timeout_seconds,
+                max_rows=self._settings.db_max_rows,
+            )
+            _span.set_attribute("row_count", raw_result.row_count)
+
+        return normalised, raw_result
+
     async def _validate_and_execute(
         self,
         sql: str,
@@ -333,6 +530,8 @@ class PipelineOrchestrator:
         session_id: str,
         turn_id: int,
         start_time: float,
+        *,
+        complexity_tier: str | None = None,
     ) -> UADAResponse | tuple[str, QueryExecutionResult]:
         """
         Run the validate-then-execute-then-repair loop.
@@ -393,7 +592,10 @@ class PipelineOrchestrator:
                 logger.info("SQL execution failed; requesting repair (attempt %d).", retries)
                 with _tracer.start_as_current_span("sql_generation") as span:
                     span.set_attribute("attempt_number", retries + 1)
-                    current_sql = await self._sql_generator.repair(normalised_sql, exc, plan)
+                    current_sql = await self._sql_generator.repair(
+                        normalised_sql, exc, plan,
+                        complexity_tier=complexity_tier,
+                    )
 
     def _log_security_incident(self, plan: QueryPlan, validation: ValidationResult) -> None:
         # Never log SQL text or values -- violation types/details only.
@@ -639,6 +841,99 @@ class PipelineOrchestrator:
                 yield {"event": "result", "data": response.model_dump_json()}
                 return
 
+            # Step 2: Complexity Router (SSE path)
+            _complexity_tier: str | None = None
+            if self._complexity_router is not None:
+                try:
+                    yield _prog("complexity_routing", "running")
+                    _schema_summary_sse = ", ".join(
+                        f"{t.table_name}({len(t.columns)} cols)"
+                        if hasattr(t, "columns") else t.table_name
+                        for t in schema_ctx.tables
+                    ) or "unknown"
+                    _cd_sse = await self._complexity_router.classify(
+                        question=question,
+                        schema_summary=_schema_summary_sse,
+                        intent_type=intent.question_type.value,
+                    )
+                    _complexity_tier = _cd_sse.tier.value
+                    yield _prog("complexity_routing", "done")
+                except Exception as _cr_exc_sse:  # noqa: BLE001
+                    logger.warning("ComplexityRouter skipped (stream): %s", _cr_exc_sse)
+
+            # Step 3: Investigation Agent — branch for COMPLEX / VERY_COMPLEX (SSE path)
+            if (
+                _complexity_tier in ("complex", "very_complex")
+                and self._investigation_agent is not None
+            ):
+                _inv_schema_sse = ", ".join(
+                    f"{t.table_name}({len(t.columns)} cols)"
+                    if hasattr(t, "columns") else t.table_name
+                    for t in schema_ctx.tables
+                ) or "unknown"
+                self._investigation_agent.set_schema_summary(_inv_schema_sse)
+
+                def _inv_progress_cb(stage_name: str, status: str) -> None:
+                    pass  # yielded via the SSE loop below — captured by generator
+
+                # Collect SSE progress events during investigation
+                _inv_progress_events: list[tuple[str, str]] = []
+
+                def _collect_progress(stage_name: str, status: str) -> None:
+                    _inv_progress_events.append((stage_name, status))
+
+                with _tracer.start_as_current_span("investigation_agent") as _inv_span_sse:
+                    _inv_span_sse.set_attribute("complexity_tier", _complexity_tier or "")
+                    _inv_result_sse = await self._investigation_agent.run(
+                        question=question,
+                        intent_type=intent.question_type.value,
+                        complexity_tier=_complexity_tier,
+                        progress_cb=_collect_progress,
+                    )
+                    _inv_span_sse.set_attribute(
+                        "investigation_state", _inv_result_sse.state.value
+                    )
+                    _inv_span_sse.set_attribute(
+                        "investigation_steps", _inv_result_sse.steps_taken
+                    )
+
+                for _ev_stage, _ev_status in _inv_progress_events:
+                    yield _prog(_ev_stage, _ev_status)
+
+                _inv_answer_sse = (
+                    _inv_result_sse.synthesized_answer
+                    or _inv_result_sse.escalation_reason
+                    or "Investigation could not produce a complete answer."
+                )
+                _inv_evidence_sse = [
+                    f"{e.get('task_id', '?')}: {e.get('summary', '')}"
+                    for e in _inv_result_sse.evidence
+                ]
+                response = UADAResponse(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    timestamp=datetime.now(tz=UTC),
+                    answer=_inv_answer_sse,
+                    question_type=intent.question_type.value,
+                    complexity_tier=_complexity_tier,
+                    investigation_steps=_inv_result_sse.steps_taken,
+                    evidence_nodes=_inv_evidence_sse,
+                    pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
+                )
+                turn = ConversationTurn(
+                    turn_id=turn_id,
+                    timestamp=response.timestamp,
+                    user_question=question,
+                    status=TurnStatus.SUCCESS if _inv_result_sse.synthesized_answer else TurnStatus.ERROR,
+                    resolved_intent=intent,
+                    result_summary=_inv_answer_sse[:200],
+                )
+                await self._save_and_return(
+                    state, turn, None, response, question=question, user_id=user_id
+                )
+                yield {"event": "result", "data": response.model_dump_json()}
+                return
+
             stage = PipelineStage.QUERY_PLANNING
             yield _prog("query_planning", "running")
             plan = self._query_planner.plan(intent, schema_ctx)
@@ -646,12 +941,17 @@ class PipelineOrchestrator:
 
             stage = PipelineStage.SQL_GENERATION
             yield _prog("sql_generation", "running")
-            sql = await self._sql_generator.generate(plan)
+            sql = await self._sql_generator.generate(
+                plan, complexity_tier=_complexity_tier
+            )
             yield _prog("sql_generation", "done")
 
             stage = PipelineStage.SQL_VALIDATION
             yield _prog("sql_validation", "running")
-            outcome = await self._validate_and_execute(sql, plan, session_id, turn_id, start_time)
+            outcome = await self._validate_and_execute(
+                sql, plan, session_id, turn_id, start_time,
+                complexity_tier=_complexity_tier,
+            )
             if isinstance(outcome, UADAResponse):
                 turn = self._terminal_turn(turn_id, question, intent, outcome.error)
                 await self._save_and_return(
@@ -661,6 +961,55 @@ class PipelineOrchestrator:
                 return
             normalised_sql, raw_result = outcome
             yield _prog("sql_validation", "done")
+
+            # Step 5: deterministic ResultCritic
+            _critic_result = None
+            if self._result_critic is not None:
+                with _tracer.start_as_current_span("result_critique") as _rc_span:
+                    _critic_result = self._result_critic.critique(
+                        raw_result, plan, intent_type=intent.question_type.value
+                    )
+                    _rc_span.set_attribute("critic_score", _critic_result.score)
+                    _rc_span.set_attribute("is_sufficient", _critic_result.is_sufficient)
+
+            # Step 6: Replanner — single deterministic retry on failed critique (SSE path)
+            if (
+                _critic_result is not None
+                and not _critic_result.is_sufficient
+                and self._replanner is not None
+            ):
+                with _tracer.start_as_current_span("replan") as _rp_span:
+                    _replan_result = self._replanner.replan(_critic_result, plan)
+                    _rp_span.set_attribute("did_replan", _replan_result.did_replan)
+                    _rp_span.set_attribute("replan_applied", len(_replan_result.applied))
+                if _replan_result.did_replan:
+                    logger.info(
+                        "Replanner applied %d mutation(s); retrying SQL generation (SSE).",
+                        len(_replan_result.applied),
+                    )
+                    plan = _replan_result.plan
+                    _retry_sql = await self._sql_generator.generate(
+                        plan, complexity_tier=_complexity_tier
+                    )
+                    _retry_outcome = await self._validate_and_execute(
+                        _retry_sql, plan, session_id, turn_id, start_time,
+                        complexity_tier=_complexity_tier,
+                    )
+                    if not isinstance(_retry_outcome, UADAResponse):
+                        normalised_sql, raw_result = _retry_outcome
+                        if self._result_critic is not None:
+                            with _tracer.start_as_current_span("result_critique_retry") as _rc2:
+                                _critic_result = self._result_critic.critique(
+                                    raw_result, plan,
+                                    intent_type=intent.question_type.value,
+                                )
+                                _rc2.set_attribute("critic_score", _critic_result.score)
+                                _rc2.set_attribute("is_sufficient", _critic_result.is_sufficient)
+                    else:
+                        logger.warning(
+                            "Replanner retry failed at validation/execution (SSE); "
+                            "proceeding with original result."
+                        )
 
             stage = PipelineStage.RESULT_ANALYSIS
             yield _prog("result_analysis", "running")
@@ -771,7 +1120,9 @@ class PipelineOrchestrator:
                 anomaly_descriptions=analysed.anomaly_descriptions,
                 suggested_questions=suggested_questions,
                 question_type=intent.question_type.value,
+                complexity_tier=_complexity_tier,
                 tables_used=tables_used,
+                critic_score=_critic_result.score if _critic_result is not None else None,
                 pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
                 correlation_result=analysed.correlation_result,
                 anomaly_result=analysed.anomaly_result,

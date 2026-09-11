@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Superseded by Mann-Kendall test (B-03); kept for reference only
 _TREND_INCREASE_THRESHOLD_PCT = 5.0
 _TREND_DECREASE_THRESHOLD_PCT = -5.0
 _VOLATILITY_STEP_THRESHOLD = 0.15
@@ -189,25 +190,55 @@ class ResultAnalyser:
             )
 
         first, last = float(series.iloc[0]), float(series.iloc[-1])
+        # change_pct kept for display/narrative (note, downstream text); not used for direction
         change_pct = ((last - first) / abs(first) * 100) if first != 0 else None
 
-        if change_pct is not None and change_pct > _TREND_INCREASE_THRESHOLD_PCT:
-            direction = TrendDirection.INCREASING
-        elif change_pct is not None and change_pct < _TREND_DECREASE_THRESHOLD_PCT:
-            direction = TrendDirection.DECREASING
-        else:
-            direction = (
-                TrendDirection.VOLATILE if self._is_volatile(series) else TrendDirection.STABLE
-            )
+        # B-03 fix: Mann-Kendall monotonic trend test replaces first-vs-last heuristic
+        direction = self._mann_kendall_direction(series)
 
         note = None
         if change_pct is not None:
             direction_word = "Up" if change_pct >= 0 else "Down"
-            note = f"{direction_word} {abs(change_pct):.1f}% from first to last."
+            note = (
+                f"{direction_word} {abs(change_pct):.1f}% overall; "
+                f"Mann-Kendall trend: {direction.value}."
+            )
 
         return TrendAnalysis(
             column=value_column, direction=direction, change_pct=change_pct, note=note
         )
+
+    def _mann_kendall_direction(
+        self,
+        series: "pd.Series",
+        p_threshold: float = 0.05,
+    ) -> "TrendDirection":
+        """
+        B-03 fix: determine monotonic trend direction via Mann-Kendall test.
+
+        Uses scipy.stats.kendalltau(time_ranks, values) as the Mann-Kendall
+        S-statistic proxy.  The p-value decides significance:
+
+        * p < p_threshold and tau > 0  → INCREASING
+        * p < p_threshold and tau < 0  → DECREASING
+        * p ≥ p_threshold              → VOLATILE or STABLE (via _is_volatile)
+        * scipy unavailable            → VOLATILE or STABLE (fallback)
+        """
+        try:
+            from scipy.stats import kendalltau
+
+            tau, p_value = kendalltau(range(len(series)), series.values)
+            logger.debug(
+                "_mann_kendall_direction: tau=%.4f p=%.4f col=%s",
+                tau, p_value, series.name,
+            )
+            if p_value < p_threshold:
+                return TrendDirection.INCREASING if tau > 0 else TrendDirection.DECREASING
+        except ImportError:
+            logger.debug("scipy not available; Mann-Kendall skipped for %s", series.name)
+
+        # Not significant (or scipy absent) — use volatility check
+        return TrendDirection.VOLATILE if self._is_volatile(series) else TrendDirection.STABLE
 
     def _is_volatile(self, series: pd.Series) -> bool:
         """

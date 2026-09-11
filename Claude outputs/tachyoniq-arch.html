@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TachyonIQ Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* ── Token system ───────────────────────────────────────── */
+:root {
+  --bg:          #F0F4F8;
+  --surface:     #FFFFFF;
+  --surface-2:   #E4ECF5;
+  --surface-3:   #D1DFEE;
+  --border:      #C3D3E4;
+  --text-1:      #0B1F34;
+  --text-2:      #355572;
+  --text-3:      #6B8FAE;
+  --accent:      #0D9488;
+  --accent-dim:  #CCFBF1;
+  --accent-2:    #0369A1;
+  --warn:        #D97706;
+  --warn-dim:    #FEF3C7;
+  --err:         #DC2626;
+  --err-dim:     #FEE2E2;
+  --ok:          #16A34A;
+  --ok-dim:      #DCFCE7;
+  --nav-w:       260px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:          #070C14;
+    --surface:     #0D1520;
+    --surface-2:   #121E2E;
+    --surface-3:   #182840;
+    --border:      #1C3050;
+    --text-1:      #E0EAF6;
+    --text-2:      #7BA3C4;
+    --text-3:      #3D6A8E;
+    --accent:      #2DD4BF;
+    --accent-dim:  #0D2A2F;
+    --accent-2:    #38BDF8;
+    --warn:        #FBBF24;
+    --warn-dim:    #1C1400;
+    --err:         #F87171;
+    --err-dim:     #2A0A0A;
+    --ok:          #4ADE80;
+    --ok-dim:      #052210;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:          #070C14;
+  --surface:     #0D1520;
+  --surface-2:   #121E2E;
+  --surface-3:   #182840;
+  --border:      #1C3050;
+  --text-1:      #E0EAF6;
+  --text-2:      #7BA3C4;
+  --text-3:      #3D6A8E;
+  --accent:      #2DD4BF;
+  --accent-dim:  #0D2A2F;
+  --accent-2:    #38BDF8;
+  --warn:        #FBBF24;
+  --warn-dim:    #1C1400;
+  --err:         #F87171;
+  --err-dim:     #2A0A0A;
+  --ok:          #4ADE80;
+  --ok-dim:      #052210;
+}
+
+/* ── Reset / base ───────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:'IBM Plex Sans',system-ui,sans-serif;
+  font-size:15px;line-height:1.7;
+  background:var(--bg);color:var(--text-1);
+  min-height:100vh;
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.layout{display:flex;min-height:100vh}
+nav.sidebar{
+  position:fixed;top:0;left:0;bottom:0;width:var(--nav-w);
+  background:var(--surface);border-right:1px solid var(--border);
+  overflow-y:auto;z-index:100;padding:0 0 2rem;
+  scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+}
+.nav-logo{
+  padding:1.5rem 1.2rem 1rem;
+  border-bottom:1px solid var(--border);
+  margin-bottom:.5rem;
+}
+.nav-logo .product{
+  font-family:'Sora',sans-serif;font-weight:700;font-size:1rem;
+  color:var(--accent);letter-spacing:-.02em;
+}
+.nav-logo .doc-type{
+  font-size:.7rem;font-weight:500;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-3);margin-top:.15rem;
+}
+.nav-section-label{
+  font-size:.65rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--text-3);padding:.9rem 1.2rem .3rem;font-weight:600;
+}
+nav a{
+  display:block;padding:.35rem 1.2rem;font-size:.8rem;color:var(--text-2);
+  text-decoration:none;border-left:2px solid transparent;
+  transition:color .15s,border-color .15s,background .15s;
+  line-height:1.4;
+}
+nav a:hover{color:var(--accent);background:var(--surface-2)}
+nav a.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-dim)}
+
+.content{
+  margin-left:var(--nav-w);padding:3rem 4rem 6rem 3.5rem;
+  max-width:calc(var(--nav-w) + 920px);width:100%;
+}
+
+/* ── Theme toggle ────────────────────────────────────────── */
+.theme-btn{
+  position:fixed;top:1rem;right:1rem;z-index:200;
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text-2);padding:.4rem .7rem;border-radius:6px;
+  cursor:pointer;font-size:.75rem;font-family:inherit;
+  transition:all .15s;
+}
+.theme-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Typography ─────────────────────────────────────────── */
+h1,h2,h3,h4,h5{
+  font-family:'Sora',sans-serif;color:var(--text-1);
+  text-wrap:balance;line-height:1.25;
+}
+h1{font-size:2.4rem;font-weight:700;letter-spacing:-.04em;margin-bottom:1rem}
+h2{font-size:1.5rem;font-weight:600;letter-spacing:-.025em;margin:3rem 0 1rem;
+   padding-top:3rem;border-top:1px solid var(--border)}
+h3{font-size:1.1rem;font-weight:600;letter-spacing:-.015em;margin:2rem 0 .75rem;color:var(--text-1)}
+h4{font-size:.9rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+   color:var(--text-3);margin:1.5rem 0 .5rem}
+p{margin-bottom:1rem;max-width:72ch;color:var(--text-2)}
+a{color:var(--accent-2);text-decoration:none}
+a:hover{text-decoration:underline}
+strong{color:var(--text-1);font-weight:600}
+code,kbd{
+  font-family:'JetBrains Mono',monospace;font-size:.82em;
+  background:var(--surface-2);padding:.1em .4em;border-radius:4px;
+  color:var(--accent);border:1px solid var(--border);
+}
+pre{
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:8px;padding:1.25rem 1.5rem;overflow-x:auto;
+  font-family:'JetBrains Mono',monospace;font-size:.8rem;
+  line-height:1.6;color:var(--text-1);margin:1rem 0;
+}
+pre code{background:none;padding:0;border:none;font-size:1em;color:inherit}
+
+/* ── Section header ─────────────────────────────────────── */
+.section-header{margin-bottom:2rem}
+.phase-tag{
+  display:inline-block;font-size:.65rem;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;padding:.3rem .7rem;border-radius:4px;
+  background:var(--accent-dim);color:var(--accent);margin-bottom:.75rem;
+  border:1px solid var(--accent);opacity:.8;
+}
+.doc-meta{
+  font-size:.78rem;color:var(--text-3);margin-top:.5rem;
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ── Callouts ────────────────────────────────────────────── */
+.callout{
+  padding:1rem 1.25rem;border-radius:8px;margin:1.25rem 0;
+  border-left:3px solid;font-size:.875rem;
+}
+.callout p{max-width:none;margin-bottom:.4rem;color:inherit}
+.callout p:last-child{margin-bottom:0}
+.callout.critical{background:var(--err-dim);border-color:var(--err);color:var(--err)}
+.callout.warn{background:var(--warn-dim);border-color:var(--warn);color:var(--warn)}
+.callout.ok{background:var(--ok-dim);border-color:var(--ok);color:var(--ok)}
+.callout.info{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.callout strong{color:inherit}
+
+/* ── Tables ─────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto;margin:1rem 0}
+table{border-collapse:collapse;width:100%;font-size:.82rem}
+th{
+  background:var(--surface-2);color:var(--text-1);
+  font-family:'Sora',sans-serif;font-weight:600;font-size:.72rem;
+  letter-spacing:.07em;text-transform:uppercase;text-align:left;
+  padding:.6rem .9rem;border-bottom:2px solid var(--border);
+}
+td{
+  padding:.55rem .9rem;border-bottom:1px solid var(--border);
+  color:var(--text-2);vertical-align:top;font-size:.82rem;
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface-2)}
+.mono{font-family:'JetBrains Mono',monospace;font-size:.78rem}
+.num{font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace}
+
+/* ── Badges ─────────────────────────────────────────────── */
+.badge{
+  display:inline-block;padding:.15rem .5rem;border-radius:4px;
+  font-size:.68rem;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;font-family:'JetBrains Mono',monospace;
+  white-space:nowrap;
+}
+.badge-ok{background:var(--ok-dim);color:var(--ok)}
+.badge-warn{background:var(--warn-dim);color:var(--warn)}
+.badge-err{background:var(--err-dim);color:var(--err)}
+.badge-info{background:var(--accent-dim);color:var(--accent)}
+.badge-neutral{background:var(--surface-2);color:var(--text-3)}
+
+/* ── Cards / grid ────────────────────────────────────────── */
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:1.25rem 1.5rem;margin:.75rem 0;
+}
+.card-grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));margin:1rem 0}
+.card h3{margin-top:0}
+.kv-list{list-style:none;font-size:.82rem}
+.kv-list li{
+  display:flex;gap:.75rem;padding:.3rem 0;
+  border-bottom:1px solid var(--border);align-items:baseline;
+}
+.kv-list li:last-child{border-bottom:none}
+.kv-list .k{color:var(--text-3);font-size:.72rem;font-family:'JetBrains Mono',monospace;
+  text-transform:uppercase;letter-spacing:.06em;min-width:130px;flex-shrink:0}
+.kv-list .v{color:var(--text-1);font-size:.82rem}
+
+/* ── Details / accordion ─────────────────────────────────── */
+details{
+  border:1px solid var(--border);border-radius:8px;margin:.75rem 0;
+  background:var(--surface);
+}
+summary{
+  padding:.85rem 1.1rem;cursor:pointer;font-weight:600;font-size:.88rem;
+  font-family:'Sora',sans-serif;color:var(--text-1);
+  display:flex;align-items:center;gap:.6rem;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::before{
+  content:'▶';font-size:.6rem;color:var(--text-3);
+  transition:transform .2s;flex-shrink:0;
+}
+details[open] summary::before{transform:rotate(90deg)}
+details[open] summary{border-bottom:1px solid var(--border)}
+.details-body{padding:1.25rem 1.5rem}
+
+/* ── Pipeline flow ───────────────────────────────────────── */
+.pipeline{display:flex;flex-direction:column;gap:.4rem;margin:1.25rem 0}
+.pipe-step{
+  display:flex;align-items:flex-start;gap:1rem;
+  padding:.8rem 1rem;background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;
+}
+.pipe-num{
+  background:var(--accent);color:var(--bg);
+  font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;
+  padding:.2rem .5rem;border-radius:4px;flex-shrink:0;min-width:2rem;
+  text-align:center;margin-top:.15rem;
+}
+.pipe-step h4{margin:0 0 .2rem;font-size:.85rem;text-transform:none;
+  letter-spacing:0;color:var(--text-1)}
+.pipe-step p{margin:0;font-size:.78rem;color:var(--text-2)}
+.pipe-arrow{text-align:center;color:var(--text-3);font-size:.85rem;margin:-.1rem 0}
+
+/* ── Mermaid override ────────────────────────────────────── */
+pre.mermaid{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.5rem}
+
+/* ── Competitor table badges ─────────────────────────────── */
+.c-yes{color:var(--ok)}
+.c-partial{color:var(--warn)}
+.c-no{color:var(--err)}
+
+/* ── Roadmap ─────────────────────────────────────────────── */
+.roadmap{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin:1rem 0}
+.roadmap-phase{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:1.25rem;
+}
+.roadmap-phase .rp-tag{
+  font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-3);font-weight:700;margin-bottom:.5rem;
+  font-family:'JetBrains Mono',monospace;
+}
+.roadmap-phase h3{margin:0 0 .75rem;font-size:.95rem}
+.roadmap-phase ul{list-style:none;font-size:.8rem;color:var(--text-2)}
+.roadmap-phase li{padding:.2rem 0;padding-left:1rem;position:relative}
+.roadmap-phase li::before{content:'—';position:absolute;left:0;color:var(--text-3)}
+
+/* ── Diff table ──────────────────────────────────────────── */
+.diff-added{color:var(--ok);font-size:.78rem}
+.diff-removed{color:var(--err);text-decoration:line-through;font-size:.78rem}
+
+/* ── Sticky section headings for TOC tracking ────────────── */
+section{scroll-margin-top:2rem}
+
+/* ── Mobile fallback ─────────────────────────────────────── */
+@media(max-width:800px){
+  nav.sidebar{position:relative;width:100%;height:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .layout{flex-direction:column}
+  .content{margin-left:0;padding:1.5rem 1.25rem}
+  .roadmap{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  h1{font-size:1.7rem}
+}
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()" aria-label="Toggle theme">◑ Theme</button>
+
+<div class="layout">
+<!-- ─────────────── SIDEBAR NAV ─────────────── -->
+<nav class="sidebar" id="sidebar">
+  <div class="nav-logo">
+    <div class="product">TachyonIQ</div>
+    <div class="doc-type">Architecture &amp; Research Report</div>
+  </div>
+
+  <div class="nav-section-label">Audit &amp; Research</div>
+  <a href="#exec">Executive Summary</a>
+  <a href="#repo-audit">Phase 0 — Repository Audit</a>
+  <a href="#competitive">Phase 1 — Competitive Analysis</a>
+
+  <div class="nav-section-label">Current Architecture</div>
+  <a href="#pipeline">Pipeline Deep-Dive</a>
+  <a href="#security">Security Layer</a>
+  <a href="#bugs">Critical Bugs Found</a>
+  <a href="#gaps">Design Gaps</a>
+
+  <div class="nav-section-label">Proposed Architecture</div>
+  <a href="#ir">Analytical IR (Ph. 6–10)</a>
+  <a href="#scl">Semantic Layer (Ph. 11–15)</a>
+  <a href="#agent-loop">Agent Loop (Ph. 16–20)</a>
+  <a href="#stats">Statistical Engine (Ph. 21–25)</a>
+  <a href="#viz">Viz &amp; Evidence Graph (Ph. 26–29)</a>
+
+  <div class="nav-section-label">Strategy</div>
+  <a href="#differentiators">15+ Differentiators (Ph. 30)</a>
+  <a href="#techstack">Tech Stack (Ph. 31–35)</a>
+  <a href="#roadmap">Roadmap (Ph. 36–38)</a>
+  <a href="#eval">Evaluation (Ph. 39)</a>
+  <a href="#done">Definition of Done (Ph. 40)</a>
+</nav>
+
+<!-- ─────────────── MAIN CONTENT ─────────────── -->
+<main class="content">
+
+<!-- ══ COVER ══════════════════════════════════════════ -->
+<section id="exec">
+  <div class="section-header">
+    <div class="phase-tag">Principal Architect Report</div>
+    <h1>TachyonIQ Architecture &amp;<br>Research Specification</h1>
+    <p class="doc-meta">
+      Prepared: 2026-09-06 &nbsp;·&nbsp;
+      Codebase: UADA v1.0 &nbsp;·&nbsp;
+      Scope: 40-phase audit + architecture &nbsp;·&nbsp;
+      Status: <span style="color:var(--warn)">AWAITING APPROVAL — no code modified</span>
+    </p>
+  </div>
+
+  <div class="callout critical">
+    <strong>⚠ Three immediate actions before any architecture work begins:</strong>
+    <p>1. <strong>Rotate OpenAI API key</strong> — live key present in <code>/home/claude/uada/.env</code> (<code>sk-proj-…</code>). Add <code>.env</code> to <code>.gitignore</code> immediately.</p>
+    <p>2. <strong>Three runtime crashes in cloud adapters</strong> — Snowflake, BigQuery, Redshift will each throw <code>TypeError</code> on first query due to field-name mismatches (<code>column_names</code> vs <code>columns</code>, <code>references_table/column</code> vs <code>references</code>).</p>
+    <p>3. <strong><code>discover_schema()</code> crashes</strong> — calls <code>.values()</code> on a <code>list</code>, not a <code>dict</code>. Affects all connection types.</p>
+  </div>
+
+  <h3>What UADA is today</h3>
+  <p>A 10-phase conversational analytics pipeline: NL question → intent extraction (LLM) → deterministic query planning → SQL generation (LLM) → AST-based security validation → DB execution → statistical analysis → visualisation → insight generation (LLM) → follow-up suggestions. The architecture is coherent and well-structured. Three LLM calls per query. 60 source files. Five-layer security model with an excellent AST-based SQL validator at its core.</p>
+
+  <h3>What it must become to win</h3>
+  <p>Competitive benchmarks (BIRD, Spider 2.0) show direct LLM text-to-SQL achieves 10–17% accuracy on enterprise complexity. Systems with governed semantic layers and proper orchestration reach 84–100%. The market has converged on semantic layers as the accuracy moat. <strong>No competitor owns the hybrid routing pattern</strong> (semantic layer for governed metrics + graceful LLM fallback for ad-hoc, with routing rationale surfaced to users). That is TachyonIQ's primary white space.</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h4>Files Audited</h4>
+      <p style="font-size:2rem;font-weight:700;font-family:'Sora',sans-serif;color:var(--accent);margin:0">60</p>
+      <p style="margin:0;font-size:.8rem">Python source files + config</p>
+    </div>
+    <div class="card">
+      <h4>Pipeline Phases</h4>
+      <p style="font-size:2rem;font-weight:700;font-family:'Sora',sans-serif;color:var(--accent);margin:0">10</p>
+      <p style="margin:0;font-size:.8rem">Per query, 3 LLM calls</p>
+    </div>
+    <div class="card">
+      <h4>Runtime Bugs</h4>
+      <p style="font-size:2rem;font-weight:700;font-family:'Sora',sans-serif;color:var(--err);margin:0">3</p>
+      <p style="margin:0;font-size:.8rem">Will crash in production</p>
+    </div>
+    <div class="card">
+      <h4>Test Coverage</h4>
+      <p style="font-size:2rem;font-weight:700;font-family:'Sora',sans-serif;color:var(--warn);margin:0">1</p>
+      <p style="margin:0;font-size:.8rem">Integration test only</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ PHASE 0: REPO AUDIT ══════════════════════════════ -->
+<section id="repo-audit">
+  <h2>Phase 0 — Repository Audit</h2>
+  <p>Complete technical inventory of all 60 source files. Every class, method signature, data flow, and dependency documented.</p>
+
+  <h3>File Inventory</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Module</th><th>Key Classes</th><th>Role</th><th>Status</th></tr></thead>
+    <tbody>
+    <tr><td class="mono">uada/config.py</td><td><code>Settings</code></td><td>All UADA_* env vars via pydantic-settings</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/models/intent.py</td><td><code>AnalyticalIntent</code>, <code>QuestionType</code> (11 values)</td><td>LLM output schema; cross-field validators</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/models/result.py</td><td><code>UADAResponse</code>, <code>AnalysedResult</code>, <code>VegaLiteSpec</code>, <code>KpiSpec</code>, <code>ForecastResult</code></td><td>Full response shape</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/models/conversation.py</td><td><code>ConversationState</code>, <code>ConversationTurn</code>, <code>ActiveContext</code></td><td>Session state</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/models/query_plan.py</td><td><code>QueryPlan</code>, <code>ResolvedMeasure</code>, <code>ResolvedJoin</code></td><td>Deterministic query IR</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/models/schema_context.py</td><td><code>SchemaContext</code>, <code>ColumnContext</code> (<code>column_name</code> field), <code>TableContext</code></td><td>Retrieved schema for LLM prompts</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/scl/schema.py</td><td><code>SemanticContextLayer</code>, <code>SecurityPolicy</code></td><td>SCL YAML model; allowlist gating</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/scl/loader.py</td><td><code>SCLLoader</code>, <code>_SCLSafeLoader</code></td><td>YAML 1.2 safe parse</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/scl/manager.py</td><td><code>SCLManager</code></td><td>Lookup indexes; <code>get_allowed_tables()</code></td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/scl/reflector.py</td><td><code>SCLReflector</code></td><td>Build SCL from live DB introspection</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/orchestrator.py</td><td><code>PipelineOrchestrator</code></td><td>Drives all 10 phases; owns repair loop</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/schema_linker.py</td><td><code>SchemaLinker</code></td><td>Hybrid retrieval → SchemaContext</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/intent_extractor.py</td><td><code>IntentExtractor</code></td><td>PydanticAI agent → AnalyticalIntent</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/query_planner.py</td><td><code>QueryPlanner</code></td><td>Deterministic; 7 dialects; fiscal NYI</td><td><span class="badge badge-warn">Gaps</span></td></tr>
+    <tr><td class="mono">uada/pipeline/sql_generator.py</td><td><code>SQLGenerator</code></td><td>PydanticAI → SQL string; code-fence strip</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/sql_validator.py</td><td><code>SQLValidator</code></td><td>9-rule AST security gate (CRITICAL)</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/result_analyser.py</td><td><code>ResultAnalyser</code></td><td>Pandas + DuckDB OLAP; trend/outlier</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/viz_generator.py</td><td><code>VisualisationGenerator</code></td><td>17 chart types; Altair; LLM fallback</td><td><span class="badge badge-warn">Gaps</span></td></tr>
+    <tr><td class="mono">uada/pipeline/followup_engine.py</td><td><code>FollowUpEngine</code></td><td>Template-driven follow-up suggestions</td><td><span class="badge badge-ok">Fixed</span></td></tr>
+    <tr><td class="mono">uada/pipeline/insight_generator.py</td><td><code>InsightGenerator</code></td><td>LLM insights from stat summaries only</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/conversation_store.py</td><td><code>ConversationStore</code></td><td>Redis or in-memory; turn compression</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/pipeline/data_profiler.py</td><td><code>DataProfiler</code></td><td>Per-column stats; no PII in LLM</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/analytics/anomaly.py</td><td><code>AnomalyDetector</code></td><td>Isolation Forest (scikit-learn)</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/analytics/correlation.py</td><td><code>CorrelationAnalyser</code></td><td>Pearson/Spearman pairwise</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/analytics/data_quality.py</td><td><code>DataQualityChecker</code></td><td>Null rates, dups, type consistency</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/analytics/explainability.py</td><td><code>ExplainabilityBuilder</code></td><td>Regex SQL decomposition → plain English</td><td><span class="badge badge-warn">Fragile</span></td></tr>
+    <tr><td class="mono">uada/analytics/forecast.py</td><td><code>Forecaster</code></td><td>Holt-Winters → ARIMA → linear fallback</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/retrieval/hybrid.py</td><td><code>HybridRetriever</code></td><td>RRF merge of Chroma + BM25 (k=60)</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/retrieval/embedder.py</td><td><code>Embedder</code></td><td>SentenceTransformer BAAI/bge-small-en</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/db/adapter.py</td><td><code>SQLAlchemyAdapter</code></td><td>PG/MySQL/SQLite/MSSQL; timeout guard</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/db/connection_manager.py</td><td><code>DatabaseConnectionManager</code></td><td>UUID-keyed registry; connections.json</td><td><span class="badge badge-err">Bug</span></td></tr>
+    <tr><td class="mono">uada/db/adapters/snowflake.py</td><td><code>SnowflakeAdapter</code></td><td>snowflake-sqlalchemy</td><td><span class="badge badge-err">Bug</span></td></tr>
+    <tr><td class="mono">uada/db/adapters/bigquery.py</td><td><code>BigQueryAdapter</code></td><td>sqlalchemy-bigquery; tempfile leak</td><td><span class="badge badge-err">Bug</span></td></tr>
+    <tr><td class="mono">uada/db/adapters/redshift.py</td><td><code>RedshiftAdapter</code></td><td>sqlalchemy-redshift</td><td><span class="badge badge-err">Bug</span></td></tr>
+    <tr><td class="mono">uada/db/saved_analysis_store.py</td><td><code>SavedAnalysisStore</code></td><td>Thread-safe SQLite CRUD</td><td><span class="badge badge-warn">Gaps</span></td></tr>
+    <tr><td class="mono">uada/observability/audit.py</td><td><code>AuditLogger</code></td><td>Rotating JSONL; SHA-256 SQL hash only</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/observability/tracer.py</td><td><code>configure_tracing()</code></td><td>OpenTelemetry → Langfuse / logfire</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/api/app.py</td><td><code>create_app()</code></td><td>FastAPI lifespan; middleware stack</td><td><span class="badge badge-ok">Stable</span></td></tr>
+    <tr><td class="mono">uada/api/routes/query.py</td><td><code>POST /query</code>, <code>GET /query/stream</code></td><td>Main query endpoints</td><td><span class="badge badge-warn">RBAC gap</span></td></tr>
+    <tr><td class="mono">uada/api/routes/connections.py</td><td>CRUD + test/discover/refresh</td><td>Multi-tenant DB connections</td><td><span class="badge badge-err">Bug</span></td></tr>
+    <tr><td class="mono">uada/api/middleware/auth.py</td><td><code>AuthMiddleware</code></td><td>API key + JWT RBAC; 3 roles</td><td><span class="badge badge-warn">SQL leak</span></td></tr>
+    <tr><td class="mono">uada/api/routes/ui.py</td><td>Self-contained HTML SPA</td><td>TachyonIQ frontend at GET /</td><td><span class="badge badge-ok">Working</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══ PIPELINE DEEP-DIVE ══════════════════════════════ -->
+<section id="pipeline">
+  <h2>Execution Pipeline — Full Trace</h2>
+  <p>A single <code>POST /query</code> traverses these 10 phases in order. All phases run synchronously within the async event loop. Three LLM calls total (Intent, SQL Generate, Insight).</p>
+
+<pre class="mermaid">
+flowchart TD
+    A[POST /query] --> B[Middleware Stack\nRequestId · RateLimit · Auth]
+    B --> C[Phase 1: Load ConversationState\nRedis or in-memory]
+    C --> D[Phase 2: SchemaLinker\nHybridRetriever × 4 doc types\nBM25 + ChromaDB → RRF → Security Filter]
+    D --> E[Phase 3: IntentExtractor 🤖 LLM-1\nPydanticAI → AnalyticalIntent\n11 QuestionTypes · cross-field validators]
+    E --> F{OUT_OF_SCOPE\nor AMBIGUOUS?}
+    F -- Yes --> Z[Terminal UADAResponse\nClarification message]
+    F -- No --> G[Phase 4: QueryPlanner DETERMINISTIC\nMeasure resolve · Join BFS · Dialect SQL]
+    G --> H[Phase 5: SQLGenerator 🤖 LLM-2\nPydanticAI → raw SQL string]
+    H --> I{SQLValidator\n9-rule AST check}
+    I -- VIOLATION --> X[HALT — SecurityViolation\nNo retry ever]
+    I -- Safe --> J[Phase 6: DB Execute\n30s timeout · 1000-row cap]
+    J -- Error --> K[SQLGenerator.repair 🤖 LLM-2b\n→ SQLValidator again → retry]
+    J -- Success --> L[Phase 7: ResultAnalyser\nPandas + DuckDB OLAP\nTrend · Outlier · Correlation]
+    L --> M[Phase 8: Optional Analytics\nForecaster · AnomalyDetector]
+    M --> N[Phase 9: VisualisationGenerator\nDeterministic chart type selection\nAltair → Vega-Lite spec]
+    N --> O[Phase 10: Post-processing\nFollowUpEngine · DataQualityChecker\nExplainabilityBuilder · InsightGenerator 🤖 LLM-3]
+    O --> P[ConversationStore.save\nAuditLogger.log]
+    P --> Q[Return UADAResponse HTTP 200]
+
+    style I fill:#2A0A0A,stroke:#F87171,color:#F87171
+    style X fill:#2A0A0A,stroke:#F87171,color:#F87171
+</pre>
+
+  <h3>Phase-by-phase timing (observed, demo SQLite)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Phase</th><th>Component</th><th>Type</th><th>Typical cost</th><th>Bottleneck?</th></tr></thead>
+    <tbody>
+    <tr><td>1</td><td>ConversationStore.load</td><td>I/O</td><td>&lt;5ms</td><td>No</td></tr>
+    <tr><td>2</td><td>SchemaLinker (4 retrieval calls)</td><td>CPU + I/O</td><td>40–120ms</td><td>Moderate</td></tr>
+    <tr><td>3</td><td>IntentExtractor (LLM)</td><td>Network</td><td>800–2000ms</td><td><strong>Yes</strong></td></tr>
+    <tr><td>4</td><td>QueryPlanner</td><td>CPU</td><td>&lt;10ms</td><td>No</td></tr>
+    <tr><td>5</td><td>SQLGenerator (LLM)</td><td>Network</td><td>500–1500ms</td><td><strong>Yes</strong></td></tr>
+    <tr><td>6</td><td>SQLValidator + DB Execute</td><td>CPU + DB I/O</td><td>5–200ms</td><td>DB-dependent</td></tr>
+    <tr><td>7–8</td><td>ResultAnalyser + Analytics</td><td>CPU</td><td>20–80ms</td><td>No</td></tr>
+    <tr><td>9</td><td>VisualisationGenerator</td><td>CPU (+ optional LLM)</td><td>10–500ms</td><td>LLM path only</td></tr>
+    <tr><td>10</td><td>InsightGenerator (LLM)</td><td>Network</td><td>600–1500ms</td><td><strong>Yes</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Total p50 round-trip with GPT-4o: <strong>~3–5 seconds</strong>. Phases 3, 5, and 10 are the LLM bottlenecks. The SSE streaming path (<code>GET /query/stream</code>) reports progress per phase but does not reduce latency.</p>
+</section>
+
+<!-- ══ SECURITY ══════════════════════════════════════ -->
+<section id="security">
+  <h2>Security Layer</h2>
+  <div class="callout info">
+    <strong>CRITICAL INVARIANT (must never be moved):</strong> <code>SQLValidator.validate()</code> runs INSIDE the SQL repair loop before EVERY execution attempt. Security violations cause immediate halt with no retry. This architecture is correct and must be preserved in all future refactoring.
+  </div>
+
+  <h3>Five-layer model</h3>
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-num">L1</div>
+      <div>
+        <h4>Read-only credentials</h4>
+        <p>Documented requirement for read-only DB account. Heuristic probe: attempts INSERT into <code>__uada_readonly_probe__</code>; logs warning if it succeeds. <strong>Not enforced programmatically</strong> — relies on DB-side configuration.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">L2</div>
+      <div>
+        <h4>SCL schema allowlist</h4>
+        <p><code>SecurityPolicy.excluded_tables</code> + per-table/column <code>excluded: true</code> flags. <code>SchemaLinker</code> security-filters retrieved tables before they enter the LLM prompt. <code>SQLValidator</code> receives the same <code>allowed_tables</code> frozenset at boot.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">L3</div>
+      <div>
+        <h4>AST-based SQL Validator — 9 rules</h4>
+        <p>SQLGlot parse → rule chain: (1) empty, (2) comment injection (<code>--</code>, <code>/*</code>), (3) multiple statements, (4) non-SELECT type (12 forbidden: INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/MERGE/TRUNCATE/COMMAND/TRANSACTION/GRANT/REVOKE), (5) system schema prefix (16 blocked: information_schema, pg_catalog, sys, sqlite_master…), (6) table allowlist, (7) dangerous function (32 blocked: xp_cmdshell, pg_read_file, sleep, benchmark, version…), (8) subquery depth &gt;3, (9) LIMIT injection.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">L4</div>
+      <div>
+        <h4>Execution constraints</h4>
+        <p>30s timeout (real enforcement only on SQLite via <code>set_progress_handler</code> — advisory-only on PG/MySQL). 1000-row cap via <code>fetchmany(1001)</code> + truncation. <code>is_truncated</code> flag in response.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">L5</div>
+      <div>
+        <h4>Prompt injection protection</h4>
+        <p>4096-char question limit. Comment detection pre-parse. LLM prompts contain schema metadata and question only — never raw row data. <code>InsightGenerator</code> sees only pre-computed statistical summaries. <code>AuditLogger</code> logs SHA-256(SQL)[:16] only.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>SQLValidator rule reference</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>Rule</th><th>Check method</th><th>Violation type</th><th>Retryable?</th></tr></thead>
+    <tbody>
+    <tr><td class="num">1</td><td>Empty input</td><td>String check</td><td>EMPTY_QUERY</td><td>No</td></tr>
+    <tr><td class="num">2</td><td>SQL comment injection</td><td><code>--</code> or <code>/*</code> substring</td><td>COMMENT_INJECTION</td><td>No</td></tr>
+    <tr><td class="num">3</td><td>Multiple statements</td><td>AST statement count</td><td>MULTIPLE_STATEMENTS</td><td>No</td></tr>
+    <tr><td class="num">4</td><td>Non-SELECT statement</td><td>AST node type</td><td>NON_SELECT_STATEMENT</td><td>No</td></tr>
+    <tr><td class="num">5</td><td>System schema access</td><td>Table prefix match (16 schemas)</td><td>SYSTEM_TABLE_ACCESS</td><td>No</td></tr>
+    <tr><td class="num">6</td><td>Table not in allowlist</td><td>Frozenset lookup (from SCL)</td><td>TABLE_NOT_IN_ALLOWLIST</td><td>No</td></tr>
+    <tr><td class="num">7</td><td>Dangerous function call</td><td>AST Anonymous + Func nodes (32 fns)</td><td>DANGEROUS_FUNCTION</td><td>No</td></tr>
+    <tr><td class="num">8</td><td>Subquery depth &gt;3</td><td>Count <code>exp.Subquery</code> nodes</td><td>SUBQUERY_DEPTH_EXCEEDED</td><td>No</td></tr>
+    <tr><td class="num">9</td><td>Missing LIMIT</td><td>Top-level SELECT node check</td><td>—</td><td>N/A (injected)</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══ CRITICAL BUGS ══════════════════════════════════ -->
+<section id="bugs">
+  <h2>Critical Bugs Found</h2>
+  <p>These will crash at runtime and must be fixed before any production use of the affected features. They do not require architectural changes — they are clean one-line or small-patch fixes.</p>
+
+  <details>
+    <summary><span class="badge badge-err">BUG-1</span> &nbsp;discover_schema() — list vs dict</summary>
+    <div class="details-body">
+      <p><strong>File:</strong> <code>uada/db/connection_manager.py</code> — <code>DatabaseConnectionManager.discover_schema()</code></p>
+      <p><strong>Symptom:</strong> <code>AttributeError: 'list' object has no attribute 'values'</code></p>
+      <p><strong>Cause:</strong> Calls <code>raw.tables.values()</code> but <code>raw.tables</code> is a <code>list[RawTableInfo]</code>, not a <code>dict</code>.</p>
+      <p><strong>Fix:</strong> Replace <code>raw.tables.values()</code> with <code>raw.tables</code> (iterate the list directly).</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="badge badge-err">BUG-2</span> &nbsp;Cloud adapters — QueryExecutionResult field mismatch</summary>
+    <div class="details-body">
+      <p><strong>Files:</strong> <code>uada/db/adapters/snowflake.py</code>, <code>bigquery.py</code>, <code>redshift.py</code></p>
+      <p><strong>Symptom:</strong> <code>TypeError: unexpected keyword argument 'columns'</code></p>
+      <p><strong>Cause:</strong> Cloud adapters construct <code>QueryExecutionResult(columns=..., rows=...)</code> but the dataclass in <code>db/interface.py</code> uses field names <code>column_names</code> and <code>rows</code>.</p>
+      <p><strong>Fix:</strong> Change <code>columns=</code> to <code>column_names=</code> in all three adapter files.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="badge badge-err">BUG-3</span> &nbsp;Cloud adapters — RawColumnInfo field mismatch</summary>
+    <div class="details-body">
+      <p><strong>Files:</strong> Same three cloud adapters.</p>
+      <p><strong>Symptom:</strong> <code>TypeError: unexpected keyword argument 'references'</code></p>
+      <p><strong>Cause:</strong> Cloud adapters pass <code>references=None</code> but <code>RawColumnInfo</code> in <code>db/interface.py</code> uses <code>references_table</code> and <code>references_column</code> as separate fields.</p>
+      <p><strong>Fix:</strong> Replace <code>references=None</code> with <code>references_table=None, references_column=None</code>.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="badge badge-warn">BUG-4</span> &nbsp;BigQuery tempfile credential leak</summary>
+    <div class="details-body">
+      <p><strong>File:</strong> <code>uada/db/adapters/bigquery.py</code></p>
+      <p><strong>Issue:</strong> Service-account JSON written to <code>NamedTemporaryFile(delete=False)</code> — file is never cleaned up. Accumulates credential files on disk.</p>
+      <p><strong>Fix:</strong> Use a context manager or implement <code>__del__</code> / lifespan cleanup to delete the tempfile after the engine is created.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="badge badge-warn">BUG-5</span> &nbsp;can_see_sql RBAC not enforced</summary>
+    <div class="details-body">
+      <p><strong>File:</strong> <code>uada/api/routes/query.py</code></p>
+      <p><strong>Issue:</strong> <code>AuthMiddleware</code> defines <code>ConnectionPolicy.can_see_sql</code> (analyst+ only) but <code>POST /query</code> returns the <code>sql</code> field to all roles including viewer.</p>
+      <p><strong>Fix:</strong> In the query route handler, check <code>request.state.role</code> and set <code>response.sql = None</code> for viewer-role users before returning.</p>
+    </div>
+  </details>
+</section>
+
+<!-- ══ DESIGN GAPS ══════════════════════════════════════ -->
+<section id="gaps">
+  <h2>Design Gaps &amp; Limitations</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Gap</th><th>Severity</th><th>Impact</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><strong>row_filters not enforced</strong><br><span style="font-size:.78rem;color:var(--text-3)">SCL security.row_filters documented as "future use — not enforced in POC"</span></td>
+      <td><span class="badge badge-err">Critical</span></td>
+      <td>Multi-tenant isolation impossible. Any user can query any row.</td>
+    </tr>
+    <tr>
+      <td><strong>PostgreSQL/MySQL timeout advisory-only</strong><br><span style="font-size:.78rem;color:var(--text-3)">SQLAlchemy execution_options(timeout=) does not enforce server-side limits</span></td>
+      <td><span class="badge badge-err">Critical</span></td>
+      <td>30s timeout not reliably enforced in production. Runaway queries possible.</td>
+    </tr>
+    <tr>
+      <td><strong>Allowlist static at boot</strong><br><span style="font-size:.78rem;color:var(--text-3)">allowed_tables computed once from SCL at PipelineOrchestrator construction</span></td>
+      <td><span class="badge badge-warn">High</span></td>
+      <td>SCL updates require restart. No hot-reload.</td>
+    </tr>
+    <tr>
+      <td><strong>Rate limiter in-process only</strong><br><span style="font-size:.78rem;color:var(--text-3)">SlidingWindow uses threading.Lock dict — not shared across workers</span></td>
+      <td><span class="badge badge-warn">High</span></td>
+      <td>Multi-worker deployments (Gunicorn) have per-worker counters. Rate limit multiplied by worker count.</td>
+    </tr>
+    <tr>
+      <td><strong>X-Forwarded-For trust</strong><br><span style="font-size:.78rem;color:var(--text-3)">No trusted-proxy allowlist</span></td>
+      <td><span class="badge badge-warn">High</span></td>
+      <td>Clients can spoof IP to bypass rate limiting.</td>
+    </tr>
+    <tr>
+      <td><strong>Fiscal time range unimplemented</strong><br><span style="font-size:.78rem;color:var(--text-3)">QueryPlanner logs warning and produces no time filter</span></td>
+      <td><span class="badge badge-warn">Medium</span></td>
+      <td>Any fiscal-period question (FY2025, Q1 FY) silently returns unfiltered results.</td>
+    </tr>
+    <tr>
+      <td><strong>Missing join path silently skipped</strong><br><span style="font-size:.78rem;color:var(--text-3)">BFS failure → table dropped from join list with only a log warning</span></td>
+      <td><span class="badge badge-warn">Medium</span></td>
+      <td>Multi-table queries with incomplete SCL join definitions produce incorrect SQL without surfacing an error.</td>
+    </tr>
+    <tr>
+      <td><strong>ExplainabilityBuilder is regex-based</strong><br><span style="font-size:.78rem;color:var(--text-3)">SQL decomposition uses regex patterns, not AST</span></td>
+      <td><span class="badge badge-warn">Medium</span></td>
+      <td>Fails silently on complex SQL (CTEs, window functions, subqueries). Users get empty explanations.</td>
+    </tr>
+    <tr>
+      <td><strong>SSE endpoint auth gap</strong><br><span style="font-size:.78rem;color:var(--text-3)">GET /query/stream does not support query-parameter auth</span></td>
+      <td><span class="badge badge-warn">Medium</span></td>
+      <td>Browsers cannot send Authorization header in SSE. Stream endpoint effectively unauthenticated.</td>
+    </tr>
+    <tr>
+      <td><strong>No unit test suite</strong><br><span style="font-size:.78rem;color:var(--text-3)">Only test_e2e.py exists (not a pytest module)</span></td>
+      <td><span class="badge badge-warn">Medium</span></td>
+      <td>Zero component isolation. Bugs 1–3 above were not caught by tests.</td>
+    </tr>
+    <tr>
+      <td><strong>SavedAnalysisStore list() returns full response blob</strong><br><span style="font-size:.78rem;color:var(--text-3)">SELECT * includes full UADAResponse JSON in list view</span></td>
+      <td><span class="badge badge-neutral">Low</span></td>
+      <td>Very large list responses. Performance issue at scale.</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══ PHASE 1: COMPETITIVE ANALYSIS ══════════════════ -->
+<section id="competitive">
+  <h2>Phase 1 — Competitive Analysis</h2>
+
+  <h3>Accuracy benchmark context</h3>
+  <div class="callout info">
+    <strong>Spider 2.0 (2025):</strong> Direct LLM text-to-SQL achieves <strong>10–17%</strong> on enterprise-complexity queries. Best agentic system (Genloop) achieved <strong>96.7%</strong> on Snowflake subset. <strong>BIRD benchmark:</strong> Best systems ~72% execution accuracy. <strong>dbt 2026 study:</strong> Governed semantic layer achieves <strong>~100%</strong> on in-scope metrics vs 84–90% for raw LLM SQL. Conclusion: <strong>semantic layers are the accuracy moat</strong>.
+  </div>
+
+  <h3>Competitor matrix</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th><th>Semantic Layer</th><th>NL→SQL Approach</th><th>Multi-turn</th><th>RCA / Anomaly</th><th>Viz</th><th>Governance</th><th>MCP</th><th>Pricing</th>
+      </tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td><strong>Databricks Genie</strong></td>
+      <td><span class="c-yes">✓ Unity Catalog</span></td>
+      <td>Fine-tuned + few-shot; certified Answers</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-partial">Partial</span></td>
+      <td>Auto-chart (limited)</td>
+      <td><span class="c-yes">✓ Strong</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>Enterprise / DBU</td>
+    </tr>
+    <tr>
+      <td><strong>ThoughtSpot Spotter</strong></td>
+      <td><span class="c-yes">✓ Spotter Semantics (2025)</span></td>
+      <td>Proprietary NLP + LLM hybrid</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-partial">SpotIQ anomalies</span></td>
+      <td>Rich Liveboards</td>
+      <td><span class="c-yes">✓ Row-level</span></td>
+      <td><span class="c-partial">Partial</span></td>
+      <td>$95–125/user/mo</td>
+    </tr>
+    <tr>
+      <td><strong>Snowflake Cortex Analyst</strong></td>
+      <td><span class="c-yes">✓ YAML semantic model</span></td>
+      <td>Semantic model + LLM</td>
+      <td><span class="c-partial">Limited</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Basic charts</td>
+      <td><span class="c-yes">✓ Snowflake native</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Cortex credits</td>
+    </tr>
+    <tr>
+      <td><strong>Tellius Sensai</strong></td>
+      <td><span class="c-partial">Partial (Bushy)</span></td>
+      <td>NLP + ML ranking</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-yes">✓ Kaiya Missions</span></td>
+      <td>Auto-viz</td>
+      <td><span class="c-partial">Basic</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Enterprise</td>
+    </tr>
+    <tr>
+      <td><strong>Dot (getdot.ai)</strong></td>
+      <td><span class="c-partial">Config-based</span></td>
+      <td>GPT-4o + schema context</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Auto-chart</td>
+      <td><span class="c-partial">Basic</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>$450–800/mo</td>
+    </tr>
+    <tr>
+      <td><strong>Querio</strong></td>
+      <td><span class="c-partial">Schema annotations</span></td>
+      <td>LLM + schema hints</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Basic</td>
+      <td><span class="c-partial">Basic</span></td>
+      <td><span class="c-yes">✓ MCP-first</span></td>
+      <td>Freemium + $49+/mo</td>
+    </tr>
+    <tr>
+      <td><strong>Cube (OSS)</strong></td>
+      <td><span class="c-yes">✓ Best-in-class</span></td>
+      <td>Semantic layer → LLM</td>
+      <td><span class="c-partial">Via API</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>None native</td>
+      <td><span class="c-yes">✓ Strong</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>Open-source + Cloud</td>
+    </tr>
+    <tr>
+      <td><strong>dbt Semantic Layer</strong></td>
+      <td><span class="c-yes">✓ MetricFlow</span></td>
+      <td>Metric-only (no ad-hoc)</td>
+      <td><span class="c-no">✗</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>None native</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>dbt Cloud plans</td>
+    </tr>
+    <tr>
+      <td><strong>Sigma Computing</strong></td>
+      <td><span class="c-partial">Partial</span></td>
+      <td>LLM + schema context</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Rich spreadsheet-like</td>
+      <td><span class="c-partial">Moderate</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>$40–80/user/mo</td>
+    </tr>
+    <tr>
+      <td><strong>Microsoft Fabric Copilot</strong></td>
+      <td><span class="c-no">✗ Schema-only</span></td>
+      <td>GPT-4o + schema</td>
+      <td><span class="c-partial">Limited</span></td>
+      <td><span class="c-no">✗</span></td>
+      <td>Power BI visuals</td>
+      <td><span class="c-yes">✓ Strong</span></td>
+      <td><span class="c-partial">Partial</span></td>
+      <td>Fabric SKU add-on</td>
+    </tr>
+    <tr>
+      <td><strong>Google Looker</strong></td>
+      <td><span class="c-yes">✓ LookML</span></td>
+      <td>LookML → Gemini</td>
+      <td><span class="c-yes">✓</span></td>
+      <td><span class="c-partial">Anomaly detection</span></td>
+      <td>Explore + Dashboards</td>
+      <td><span class="c-yes">✓ Strong</span></td>
+      <td><span class="c-yes">✓</span></td>
+      <td>$30–100/user/mo</td>
+    </tr>
+    <tr style="background:var(--accent-dim)">
+      <td><strong>TachyonIQ (target)</strong></td>
+      <td><span class="c-yes">✓ SCL (YAML)</span></td>
+      <td>Hybrid routing (proposed)</td>
+      <td><span class="c-yes">✓ Active context</span></td>
+      <td><span class="c-yes">✓ + Evidence chain</span></td>
+      <td>Vega-Lite auto</td>
+      <td><span class="c-yes">✓ AST validator</span></td>
+      <td>Planned</td>
+      <td>TBD</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>White-space analysis — 6 differentiator opportunities</h3>
+  <div class="card-grid">
+    <div class="card">
+      <h4>1 — Hybrid routing UX</h4>
+      <p style="font-size:.82rem">No competitor transparently routes between semantic-layer execution and LLM SQL, surfaces which path was taken, and explains why. This is the #1 accuracy and trust gap.</p>
+    </div>
+    <div class="card">
+      <h4>2 — Anomaly → narrative → evidence</h4>
+      <p style="font-size:.82rem">Tellius comes closest with Kaiya Missions but has no evidence chain. No platform ships the full stack: detect anomaly → explain why → surface evidence nodes → recommend action.</p>
+    </div>
+    <div class="card">
+      <h4>3 — Ambiguity as UX feature</h4>
+      <p style="font-size:.82rem">All platforms fail silently or ask clarifying questions in plain text. Surfacing structured ambiguity (specific alternatives, confidence scores) as interactive chips is unoccupied territory.</p>
+    </div>
+    <div class="card">
+      <h4>4 — Cross-warehouse semantic portability</h4>
+      <p style="font-size:.82rem">Every vendor's semantic layer is locked to their warehouse. A dialect-agnostic SCL that works across PG/Snowflake/BigQuery/Redshift with one definition is a genuine moat.</p>
+    </div>
+    <div class="card">
+      <h4>5 — Scheduled autonomous investigation</h4>
+      <p style="font-size:.82rem">Tellius has this but it's black-box. A user-configurable agent that runs a defined investigation nightly, produces an evidence-graded report, and sends a summary is completely open.</p>
+    </div>
+    <div class="card">
+      <h4>6 — Metric governance suggestion flywheel</h4>
+      <p style="font-size:.82rem">No platform learns from ad-hoc queries to suggest new SCL metrics. When users ask the same ad-hoc question 10 times, TachyonIQ should propose formalising it as a governed metric.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ PROPOSED IR ══════════════════════════════════════ -->
+<section id="ir">
+  <h2>Phases 6–10 — Analytical IR Design</h2>
+  <p>The current <code>AnalyticalIntent</code> model is good but needs enrichment for the proposed architecture. Key changes: routing context, evidence graph hooks, ambiguity structured output, and metric governance signals.</p>
+
+  <h3>Proposed AnalyticalIntent extensions</h3>
+  <pre><code class="language-python"># Additions to existing AnalyticalIntent (uada/models/intent.py)
+
+class RoutingStrategy(str, Enum):
+    SEMANTIC_LAYER   = "semantic_layer"   # Metric exists in SCL → use QueryPlanner
+    LLM_SQL          = "llm_sql"          # Ad-hoc, no SCL metric → use SQLGenerator
+    HYBRID           = "hybrid"           # Combine SCL metric + LLM dimension
+
+class AmbiguityOption(BaseModel):
+    label: str           # "Revenue (net)" vs "Revenue (gross)"
+    sql_filter: str      # Concrete filter this option applies
+    confidence: float    # 0.0–1.0
+
+class StructuredAmbiguity(BaseModel):
+    field: str                      # Which field is ambiguous (e.g. "revenue")
+    options: list[AmbiguityOption]  # 2–4 concrete alternatives
+    question: str                   # Plain-English clarifying question
+
+# In AnalyticalIntent, ADD:
+routing_strategy: RoutingStrategy = RoutingStrategy.LLM_SQL
+structured_ambiguities: list[StructuredAmbiguity] = []
+governance_signal: bool = False  # True → suggest formalising as SCL metric
+evidence_nodes_required: list[str] = []  # Columns to track in evidence graph</code></pre>
+
+  <h3>Routing decision logic</h3>
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-num">R1</div>
+      <div>
+        <h4>Exact SCL metric match</h4>
+        <p>All measures in <code>intent.measures</code> resolve to named SCL metrics. → <strong>SEMANTIC_LAYER</strong>. QueryPlanner builds deterministic SQL from SCL formulas. Accuracy: near 100%.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">R2</div>
+      <div>
+        <h4>Partial SCL + ad-hoc dimension</h4>
+        <p>Some measures are SCL metrics, but dimensions or filters are not formally defined. → <strong>HYBRID</strong>. SCL metric formula is anchored; LLM adds the dimension layer.</p>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-num">R3</div>
+      <div>
+        <h4>No SCL match</h4>
+        <p>Measures not in SCL index. → <strong>LLM_SQL</strong>. Full SQLGenerator path. <code>governance_signal=True</code> if this query has been asked ≥3 times (tracked in ConversationStore aggregate).</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>User-facing routing transparency:</strong> The <code>UADAResponse</code> should expose <code>routing_strategy</code> and a brief explanation. The frontend should surface this as a small chip: <em>"Answered via governed metric</em> ✓" vs <em>"Answered via AI-generated SQL"</em>. This is the trust differentiator no competitor has.
+  </div>
+</section>
+
+<!-- ══ SEMANTIC LAYER ═══════════════════════════════════ -->
+<section id="scl">
+  <h2>Phases 11–15 — Semantic Layer Enhancements</h2>
+
+  <h3>Current SCL assessment</h3>
+  <p>The existing SCL YAML design is sound and Cube-compatible. The key gaps are: no fiscal calendar implementation, no hot-reload, no row-level security enforcement, and no metric dependency graph (metric A depends on metric B).</p>
+
+  <h3>Proposed SCL additions</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Addition</th><th>Purpose</th><th>Implementation notes</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><strong>Metric dependencies</strong></td>
+      <td>Allow metrics to reference other metrics (<code>aov = revenue / order_count</code>)</td>
+      <td>Add <code>depends_on: [metric_names]</code> to MetricDefinition. QueryPlanner resolves DAG topologically.</td>
+    </tr>
+    <tr>
+      <td><strong>Row-level security enforcement</strong></td>
+      <td>Multi-tenant isolation — restrict which rows each user/role can see</td>
+      <td>Add <code>row_filters</code> to <code>SecurityPolicy</code> as <code>role → sql_filter</code> map. SQLValidator injects as mandatory WHERE clause. Never optional.</td>
+    </tr>
+    <tr>
+      <td><strong>Fiscal calendar</strong></td>
+      <td>FY quarter/year time ranges used by finance teams</td>
+      <td>Add <code>fiscal_year_start_month</code> to DatabaseMeta (already in SCL schema). Implement in QueryPlanner: map FISCAL RelativePeriod to calendar dates using <code>fiscal_year_start_month</code>.</td>
+    </tr>
+    <tr>
+      <td><strong>Hot-reload</strong></td>
+      <td>SCL changes take effect without restart</td>
+      <td>File watcher (watchfiles) on <code>semantic_context.yaml</code> → reload <code>SCLManager</code> → push new <code>allowed_tables</code> to live <code>SQLValidator</code> instances via an <code>asyncio.Event</code>.</td>
+    </tr>
+    <tr>
+      <td><strong>Dimension tables</strong></td>
+      <td>Date dimension, geography dimension — reusable across multiple fact tables</td>
+      <td>Add <code>table_type: "dimension" | "fact" | "bridge"</code> to TableDefinition. QueryPlanner preferentially joins through dimension tables.</td>
+    </tr>
+    <tr>
+      <td><strong>Certified questions</strong></td>
+      <td>Mark specific Q&A pairs as authoritative (Databricks Genie model)</td>
+      <td>Add <code>certified: true</code> to ExampleQuery. Schema linker boosts certified examples in retrieval ranking. SQLGenerator receives certified SQL as authoritative reference.</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Metric dependency resolution</h3>
+<pre class="mermaid">
+graph LR
+    A[gross_revenue\nSUM revenue] --> C[net_revenue\ngross_revenue - returns]
+    B[total_returns\nSUM returns] --> C
+    C --> D[aov\nnet_revenue / order_count]
+    E[order_count\nCOUNT order_id] --> D
+    D --> F[ltv\naov × purchase_frequency]
+    E --> G[conversion_rate\norder_count / session_count]
+    H[session_count\nCOUNT sessions] --> G
+</pre>
+</section>
+
+<!-- ══ AGENT LOOP ══════════════════════════════════════ -->
+<section id="agent-loop">
+  <h2>Phases 16–20 — Agent Loop Architecture</h2>
+
+  <h3>Current loop limitations</h3>
+  <p>The current repair loop is LLM-2b → validator → re-execute, limited to <code>llm_max_retries</code> attempts. It has no diagnostic intelligence — it passes the raw DB error to the LLM without structured analysis. The result is generic repairs that often produce a valid but wrong query.</p>
+
+  <h3>Proposed: Diagnostic Repair Agent</h3>
+<pre class="mermaid">
+flowchart TD
+    A[SQL fails execution] --> B[ErrorClassifier\nDeterministic rule-based]
+    B --> C{Error type}
+    C -->|COLUMN_NOT_FOUND| D[ColumnResolver\nFuzzy-match against SchemaContext\nSuggest correction]
+    C -->|TABLE_NOT_FOUND| E[TableResolver\nCheck SCL aliases\nSuggest via schema linker]
+    C -->|TYPE_MISMATCH| F[TypeCoercer\nInject CAST from column type in SchemaContext]
+    C -->|SYNTAX_ERROR| G[SyntaxRepairer\nLLM repair with error + schema hint]
+    C -->|TIMEOUT| H[QuerySimplifier\nRemove optional joins · inject stricter LIMIT]
+    D --> I[Repaired SQL]
+    E --> I
+    F --> I
+    G --> I
+    H --> I
+    I --> J[SQLValidator again MANDATORY]
+    J --> K[Re-execute]
+</pre>
+
+  <p>The <code>ErrorClassifier</code> is fully deterministic — it parses the DB error message and applies regex patterns to classify the error type before any LLM call. Column-not-found and type-mismatch errors can be repaired deterministically in most cases, saving an LLM call.</p>
+
+  <h3>Agentic investigation loop (Phase 30 differentiator #5)</h3>
+  <p>Beyond the repair loop, TachyonIQ should support a multi-step autonomous investigation agent: a user asks "Why did Q3 revenue drop?" and the agent runs a sequence of queries — trend analysis → segment breakdown → anomaly detection → hypothesis testing — assembling an evidence graph before returning a final narrative. This is distinct from the single-turn pipeline.</p>
+
+<pre class="mermaid">
+flowchart TD
+    A[Investigation request\n'Why did Q3 revenue drop?'] --> B[InvestigationPlanner\nDecomposes into sub-questions]
+    B --> C[Step 1: Trend query\nConfirm the drop exists]
+    C --> D[Step 2: Segment breakdown\nRevenue by region, product, customer tier]
+    D --> E[Step 3: Anomaly detection\nIdentify outlier segments]
+    E --> F[Step 4: Hypothesis queries\nTest candidate root causes]
+    F --> G[EvidenceGraph builder\nNode: fact · Edge: causal claim · Confidence: 0–1]
+    G --> H[NarrativeSynthesiser\nOrdered evidence chain + confidence]
+    H --> I[UADAResponse with evidence_graph field]
+</pre>
+</section>
+
+<!-- ══ STATISTICAL ENGINE ══════════════════════════════ -->
+<section id="stats">
+  <h2>Phases 21–25 — Statistical Engine &amp; Time-Series</h2>
+
+  <h3>Current analytics capabilities</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Component</th><th>Current</th><th>Threshold</th><th>Gap</th></tr></thead>
+    <tbody>
+    <tr>
+      <td>Trend detection</td>
+      <td>First-to-last % change</td>
+      <td>±5% threshold</td>
+      <td>No seasonality decomposition; no Mann-Kendall test</td>
+    </tr>
+    <tr>
+      <td>Forecasting</td>
+      <td>Holt-Winters → ARIMA(1,1,0) → linear</td>
+      <td>≥8/5/3 rows</td>
+      <td>Fixed ARIMA order; no automatic order selection; no exogenous variables</td>
+    </tr>
+    <tr>
+      <td>Anomaly detection</td>
+      <td>Isolation Forest</td>
+      <td>≥10 rows, contamination=5%</td>
+      <td>No temporal anomaly detection; no contextual anomalies; no streaming</td>
+    </tr>
+    <tr>
+      <td>Root cause</td>
+      <td>None</td>
+      <td>—</td>
+      <td>Entirely missing. Largest gap vs Tellius/ThoughtSpot.</td>
+    </tr>
+    <tr>
+      <td>Correlation</td>
+      <td>Pearson/Spearman pairwise</td>
+      <td>≥10 rows</td>
+      <td>No partial correlation; no Granger causality; no cross-correlation for time series</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Proposed additions</h3>
+
+  <details>
+    <summary>Root Cause Analyser — new component</summary>
+    <div class="details-body">
+      <p>The RCA engine follows a contributive decomposition approach:</p>
+      <ol style="font-size:.85rem;color:var(--text-2);padding-left:1.5rem;line-height:2">
+        <li><strong>Metric decomposition:</strong> Use the SCL metric formula to decompose the change into additive factors (volume effect, mix effect, rate effect).</li>
+        <li><strong>Dimension contribution scoring:</strong> For each dimension column, compute the % of total metric change attributable to changes within that dimension's values.</li>
+        <li><strong>Hypothesis ranking:</strong> Sort candidate root causes by contribution magnitude × statistical confidence.</li>
+        <li><strong>Evidence queries:</strong> Generate verifying queries for top-3 hypotheses; execute and validate.</li>
+      </ol>
+      <p>Library: <strong>dowhy</strong> (causal inference) for structural causal model, falling back to manual decomposition when causal graph is unavailable.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Enhanced time-series — STL + automatic ARIMA</summary>
+    <div class="details-body">
+      <p>Replace the fixed <code>ARIMA(1,1,0)</code> with:</p>
+      <ul style="font-size:.85rem;color:var(--text-2);padding-left:1.5rem;line-height:2">
+        <li><strong>STL decomposition</strong> (Seasonal-Trend using LOESS) — expose trend, seasonal, and residual components to users, not just the composite</li>
+        <li><strong>auto_arima</strong> (pmdarima) — automatic order selection with AIC/BIC criterion; max order (3,2,3)</li>
+        <li><strong>Prophet</strong> (Facebook) — for irregular time series with holidays/events; optional heavy dependency</li>
+        <li><strong>Changepoint detection</strong> — ruptures library; detect structural breaks in time series</li>
+      </ul>
+    </div>
+  </details>
+
+  <details>
+    <summary>Contextual anomaly detection</summary>
+    <div class="details-body">
+      <p>The current Isolation Forest detects <em>global</em> anomalies (unusual rows in isolation). Production analytics needs <em>contextual</em> anomalies — a value that is unusual for the current time period or segment even if globally normal.</p>
+      <p>Proposed approach:</p>
+      <ul style="font-size:.85rem;color:var(--text-2);padding-left:1.5rem;line-height:2">
+        <li>Group-aware z-score: compute z-score within each group (segment × time bucket), not globally</li>
+        <li>Seasonal adjustment: compare current period to same period in prior cycles before flagging as anomaly</li>
+        <li>ADTK library: temporal anomaly detection toolkit with persistence and quantile detectors</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<!-- ══ VIZ + EVIDENCE GRAPH ══════════════════════════════ -->
+<section id="viz">
+  <h2>Phases 26–29 — Visualisation &amp; Evidence Graph</h2>
+
+  <h3>Visualisation gaps</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Chart type</th><th>Status</th><th>Action needed</th></tr></thead>
+    <tbody>
+    <tr><td>TABLE_VIZ</td><td><span class="badge badge-warn">Incomplete</span></td><td>Falls through to BAR branch. Needs a proper Vega-Lite table renderer with pagination.</td></tr>
+    <tr><td>TREEMAP</td><td><span class="badge badge-warn">Incomplete</span></td><td>In ChartType enum, no Altair builder. Add Altair mark_rect treemap or use Vega-Lite directly.</td></tr>
+    <tr><td>WATERFALL</td><td><span class="badge badge-warn">Incomplete</span></td><td>In enum, no builder. Critical for revenue decomposition / RCA output.</td></tr>
+    <tr><td>FUNNEL</td><td><span class="badge badge-warn">Incomplete</span></td><td>In enum, no builder. Needed for conversion analysis.</td></tr>
+    <tr><td>BOXPLOT</td><td><span class="badge badge-neutral">Missing</span></td><td>Add for distribution analysis queries (DIAGNOSTIC question type).</td></tr>
+    <tr><td>CANDLESTICK</td><td><span class="badge badge-neutral">Missing</span></td><td>Add for financial time-series queries.</td></tr>
+    <tr><td>Forecast band</td><td><span class="badge badge-neutral">Missing</span></td><td>Overlay actual + forecast + confidence interval on LINE chart when ForecastResult present.</td></tr>
+    <tr><td>Anomaly overlay</td><td><span class="badge badge-neutral">Missing</span></td><td>Overlay anomaly markers (RULE layer) on time-series LINE chart when AnomalyResult present.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Evidence Graph — new system component</h3>
+  <p>The evidence graph is the data structure that makes the "anomaly → narrative → evidence" differentiator work. It must be designed as a first-class model, not an afterthought.</p>
+
+  <pre><code class="language-python"># uada/models/evidence.py (new file — DO NOT implement until approved)
+
+from enum import Enum
+from pydantic import BaseModel
+
+class EvidenceNodeType(str, Enum):
+    METRIC       = "metric"      # A measured value at a point in time
+    SEGMENT      = "segment"     # A dimension value (e.g. region=APAC)
+    EVENT        = "event"       # A known external event (e.g. product launch)
+    ANOMALY      = "anomaly"     # A detected anomaly
+    HYPOTHESIS   = "hypothesis"  # A candidate causal explanation
+    CONCLUSION   = "conclusion"  # A confirmed or refuted conclusion
+
+class EvidenceEdgeType(str, Enum):
+    CAUSES       = "causes"      # A causes B (causal claim)
+    CORRELATES   = "correlates"  # A correlated with B (statistical)
+    EXPLAINS     = "explains"    # A explains B (contextual)
+    CONTRADICTS  = "contradicts" # A contradicts hypothesis B
+
+class EvidenceNode(BaseModel):
+    id: str
+    type: EvidenceNodeType
+    label: str
+    value: float | str | None = None
+    confidence: float          # 0.0–1.0
+    sql_query: str | None      # The query that produced this node's evidence
+    row_count: int | None      # How many rows support this node
+
+class EvidenceEdge(BaseModel):
+    from_id: str
+    to_id: str
+    type: EvidenceEdgeType
+    weight: float              # Contribution strength
+    p_value: float | None      # Statistical significance where applicable
+
+class EvidenceGraph(BaseModel):
+    root_question: str
+    nodes: list[EvidenceNode]
+    edges: list[EvidenceEdge]
+    top_conclusion: str        # One-sentence synthesis
+    confidence: float          # Graph-level confidence (min of critical path)</code></pre>
+</section>
+
+<!-- ══ DIFFERENTIATORS ═══════════════════════════════════ -->
+<section id="differentiators">
+  <h2>Phase 30 — TachyonIQ Differentiators</h2>
+  <p>15 specific, defensible advantages — not generic claims. Each is grounded in concrete technical capability or UX pattern that no current competitor ships in full.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>Differentiator</th><th>Technical basis</th><th>Nearest competitor</th><th>Gap</th></tr></thead>
+    <tbody>
+    <tr>
+      <td class="num">1</td>
+      <td><strong>Hybrid routing with transparency</strong></td>
+      <td>RoutingStrategy enum; SCL metric index lookup first; routing displayed in UI</td>
+      <td>Databricks Genie (certified Answers)</td>
+      <td>Genie doesn't show which path was taken or explain why</td>
+    </tr>
+    <tr>
+      <td class="num">2</td>
+      <td><strong>Dialect-agnostic semantic layer</strong></td>
+      <td>SCL YAML works across PG / MySQL / SQLite / Snowflake / BigQuery / Redshift</td>
+      <td>Snowflake Cortex (Snowflake-only)</td>
+      <td>Every competitor's semantic layer is vendor-locked</td>
+    </tr>
+    <tr>
+      <td class="num">3</td>
+      <td><strong>AST-based SQL security with zero LLM trust</strong></td>
+      <td>SQLGlot AST validator; 9 rules; security violations never retried</td>
+      <td>None</td>
+      <td>No competitor documents an AST-level validator — most rely on prompt engineering</td>
+    </tr>
+    <tr>
+      <td class="num">4</td>
+      <td><strong>Structured ambiguity resolution</strong></td>
+      <td>StructuredAmbiguity model; multiple concrete options with SQL filters; interactive chips in UI</td>
+      <td>None</td>
+      <td>All competitors ask free-text clarifying questions or guess</td>
+    </tr>
+    <tr>
+      <td class="num">5</td>
+      <td><strong>Evidence graph for RCA</strong></td>
+      <td>EvidenceGraph model; nodes with confidence; edges with causal type; SQL evidence trails</td>
+      <td>Tellius Kaiya (partial)</td>
+      <td>Tellius has no evidence chain — conclusions are black-box</td>
+    </tr>
+    <tr>
+      <td class="num">6</td>
+      <td><strong>Autonomous investigation agent</strong></td>
+      <td>InvestigationPlanner → multi-step query sequence → EvidenceGraph synthesis</td>
+      <td>Tellius Kaiya Missions</td>
+      <td>Tellius missions are scheduled, not on-demand; no evidence graph output</td>
+    </tr>
+    <tr>
+      <td class="num">7</td>
+      <td><strong>Metric governance suggestion flywheel</strong></td>
+      <td>governance_signal in AnalyticalIntent; frequency tracking in ConversationStore; SCL suggestion in UI</td>
+      <td>None</td>
+      <td>No competitor learns from ad-hoc queries to improve the semantic layer</td>
+    </tr>
+    <tr>
+      <td class="num">8</td>
+      <td><strong>Fiscal calendar support</strong></td>
+      <td>fiscal_year_start_month in SCL; QueryPlanner fiscal→calendar mapping</td>
+      <td>ThoughtSpot (partial)</td>
+      <td>Most platforms treat fiscal periods as custom date filters, not first-class concepts</td>
+    </tr>
+    <tr>
+      <td class="num">9</td>
+      <td><strong>Row-level security without warehouse dependency</strong></td>
+      <td>Row filters in SCL SecurityPolicy; injected as mandatory WHERE clause by SQLValidator</td>
+      <td>ThoughtSpot, Looker</td>
+      <td>Both require warehouse-native RLS configuration; TachyonIQ enforces at the semantic layer</td>
+    </tr>
+    <tr>
+      <td class="num">10</td>
+      <td><strong>Statistical narrative generation from summaries only</strong></td>
+      <td>InsightGenerator receives only pre-computed stat summaries — never raw rows or SQL</td>
+      <td>None</td>
+      <td>Most platforms send result data directly to LLM — creates PII leakage risk</td>
+    </tr>
+    <tr>
+      <td class="num">11</td>
+      <td><strong>Deterministic ExplainabilityContext via AST</strong></td>
+      <td>Replace regex decomposer with SQLGlot AST walker; produce step-by-step calculation in plain English</td>
+      <td>None</td>
+      <td>No competitor explains the SQL calculation to non-technical users in natural language</td>
+    </tr>
+    <tr>
+      <td class="num">12</td>
+      <td><strong>Forecast with confidence bands in UI</strong></td>
+      <td>ForecastResult → overlay on time-series chart; 95% CI band; horizon label</td>
+      <td>None (analytics BI tools only)</td>
+      <td>NL analytics platforms don't integrate statistical forecasting in the conversational response</td>
+    </tr>
+    <tr>
+      <td class="num">13</td>
+      <td><strong>Anomaly overlay on time-series charts</strong></td>
+      <td>AnomalyResult → RULE layer overlay on LINE chart; click-to-drill on anomaly point</td>
+      <td>None</td>
+      <td>Anomalies are reported in text; no competitor overlays them on the chart</td>
+    </tr>
+    <tr>
+      <td class="num">14</td>
+      <td><strong>Certified Q&A pairs with accuracy tracking</strong></td>
+      <td>certified: true in ExampleQuery; retrieval boost; accuracy tracking per question type</td>
+      <td>Databricks Genie</td>
+      <td>Genie requires manual curation; TachyonIQ tracks accuracy and surfaces candidates automatically</td>
+    </tr>
+    <tr>
+      <td class="num">15</td>
+      <td><strong>Real-time data quality in every response</strong></td>
+      <td>DataQualityReport (null rates, dups, type consistency, 0–100 score) in every UADAResponse</td>
+      <td>None</td>
+      <td>No competitor surfaces data quality alongside analytics results — users don't know to distrust bad data</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══ TECH STACK ══════════════════════════════════════ -->
+<section id="techstack">
+  <h2>Phases 31–35 — Technology Stack Decisions</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Layer</th><th>Current</th><th>Decision</th><th>Rationale</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><strong>LLM orchestration</strong></td>
+      <td>pydantic-ai</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Excellent structured output + retry handling; model-agnostic; defer_model_check enables clean testing</td>
+    </tr>
+    <tr>
+      <td><strong>Primary LLM</strong></td>
+      <td>GPT-4o (via .env)</td>
+      <td><span class="badge badge-ok">Keep + abstract</span></td>
+      <td>Configurable via UADA_LLM_MODEL. Add per-task model config: cheaper model for SQL repair; expensive for investigation synthesis</td>
+    </tr>
+    <tr>
+      <td><strong>SQL parsing/validation</strong></td>
+      <td>sqlglot ≥26.0</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Multi-dialect AST; critical to security layer. Do not replace.</td>
+    </tr>
+    <tr>
+      <td><strong>Vector store</strong></td>
+      <td>ChromaDB (persistent)</td>
+      <td><span class="badge badge-warn">Evaluate</span></td>
+      <td>ChromaDB is adequate for POC. At scale (&gt;100 schemas), consider qdrant or pgvector to reduce operational complexity.</td>
+    </tr>
+    <tr>
+      <td><strong>Embeddings</strong></td>
+      <td>sentence-transformers (BAAI/bge-small-en)</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Local, fast, no API cost. Upgrade to bge-base-en for better recall at marginal latency cost.</td>
+    </tr>
+    <tr>
+      <td><strong>Data analysis</strong></td>
+      <td>pandas + DuckDB</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Correct choice. DuckDB in-process OLAP is fast and dependency-light.</td>
+    </tr>
+    <tr>
+      <td><strong>Statistical forecasting</strong></td>
+      <td>statsmodels (Holt-Winters, ARIMA)</td>
+      <td><span class="badge badge-warn">Extend</span></td>
+      <td>Add pmdarima for auto_arima. Add ruptures for changepoint detection. Keep Prophet as optional heavy dep.</td>
+    </tr>
+    <tr>
+      <td><strong>Anomaly detection</strong></td>
+      <td>scikit-learn (Isolation Forest)</td>
+      <td><span class="badge badge-warn">Extend</span></td>
+      <td>Add ADTK (temporal anomaly toolkit). Add contextual z-score as a lighter alternative.</td>
+    </tr>
+    <tr>
+      <td><strong>Causal analysis</strong></td>
+      <td>None</td>
+      <td><span class="badge badge-info">Add</span></td>
+      <td>Add dowhy for structural causal models (RCA). Heavy dep — make optional via lazy import.</td>
+    </tr>
+    <tr>
+      <td><strong>Visualisation</strong></td>
+      <td>Altair → Vega-Lite JSON</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Correct abstraction. Vega-Lite v5 in frontend (already loaded from CDN).</td>
+    </tr>
+    <tr>
+      <td><strong>Web framework</strong></td>
+      <td>FastAPI + starlette</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Correct choice. Add sse-starlette as required (not optional) dependency.</td>
+    </tr>
+    <tr>
+      <td><strong>Session store</strong></td>
+      <td>Redis (with in-memory fallback)</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Move rate limiter to Redis too — fixes multi-worker isolation gap.</td>
+    </tr>
+    <tr>
+      <td><strong>Database drivers</strong></td>
+      <td>SQLAlchemy + dialect adapters</td>
+      <td><span class="badge badge-ok">Keep</span></td>
+      <td>Fix the three field-name bugs. Add real server-side timeout enforcement (PG: SET statement_timeout; MySQL: MAX_EXECUTION_TIME hint).</td>
+    </tr>
+    <tr>
+      <td><strong>Testing</strong></td>
+      <td>test_e2e.py only</td>
+      <td><span class="badge badge-err">Replace</span></td>
+      <td>Build proper pytest suite with unit tests per component. Use deepeval for LLM output quality testing (already in dev deps).</td>
+    </tr>
+    <tr>
+      <td><strong>MCP integration</strong></td>
+      <td>None</td>
+      <td><span class="badge badge-info">Add</span></td>
+      <td>MCP is winning as the agent integration protocol (Cube, Querio, Superset, Sigma all support it). Expose TachyonIQ as an MCP server to integrate with Claude, Cursor, etc.</td>
+    </tr>
+    <tr>
+      <td><strong>Secrets management</strong></td>
+      <td>.env file (live key present)</td>
+      <td><span class="badge badge-err">Replace</span></td>
+      <td>Use a proper secrets manager (HashiCorp Vault, AWS Secrets Manager, or at minimum python-dotenv + .gitignore + documentation). Rotate current leaked key immediately.</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══ ROADMAP ══════════════════════════════════════════ -->
+<section id="roadmap">
+  <h2>Phases 36–38 — Implementation Roadmap</h2>
+  <p>Three phases ordered by risk, dependency, and business value. <strong>No architectural changes begin until Phase A is complete.</strong> Each phase ends with a testable milestone.</p>
+
+  <div class="roadmap">
+    <div class="roadmap-phase">
+      <div class="rp-tag">Phase A &nbsp;·&nbsp; Weeks 1–6</div>
+      <h3>Stabilise &amp; Secure</h3>
+      <ul>
+        <li>Rotate leaked OpenAI API key</li>
+        <li>Fix BUG-1: discover_schema() list/dict</li>
+        <li>Fix BUG-2+3: cloud adapter field names</li>
+        <li>Fix BUG-4: BigQuery tempfile leak</li>
+        <li>Fix BUG-5: can_see_sql RBAC enforcement</li>
+        <li>Implement PG/MySQL server-side timeout (SET statement_timeout)</li>
+        <li>Move rate limiter to Redis</li>
+        <li>Add X-Forwarded-For trusted proxy config</li>
+        <li>Fix SSE endpoint authentication</li>
+        <li>Fix ExplainabilityBuilder: replace regex with SQLGlot AST walker</li>
+        <li>Fix SavedAnalysisStore list(): exclude response blob</li>
+        <li>Write pytest unit tests: SQLValidator (all 9 rules), QueryPlanner (7 dialects), SchemaLinker (security filter)</li>
+        <li>Implement fiscal calendar in QueryPlanner</li>
+        <li>Implement SCL hot-reload via watchfiles</li>
+      </ul>
+    </div>
+    <div class="roadmap-phase">
+      <div class="rp-tag">Phase B &nbsp;·&nbsp; Weeks 7–16</div>
+      <h3>Intelligence Layer</h3>
+      <ul>
+        <li>RoutingStrategy + hybrid routing in IntentExtractor</li>
+        <li>StructuredAmbiguity model + UI chips</li>
+        <li>Routing transparency in UADAResponse + UI badge</li>
+        <li>Metric dependency DAG in SCL + QueryPlanner resolution</li>
+        <li>Row-level security enforcement via SCL SecurityPolicy</li>
+        <li>Certified Q&A pairs: certified: true flag + retrieval boost</li>
+        <li>Diagnostic repair agent (ErrorClassifier + deterministic patchers)</li>
+        <li>Root cause analyser (contribution decomposition)</li>
+        <li>STL + auto_arima for time-series</li>
+        <li>Contextual anomaly detection (ADTK)</li>
+        <li>EvidenceGraph model + builder</li>
+        <li>Waterfall chart builder (for RCA output)</li>
+        <li>Forecast band overlay on LINE charts</li>
+        <li>Anomaly overlay on time-series charts</li>
+        <li>MCP server wrapper (expose /query as MCP tool)</li>
+        <li>Governance signal tracking + SCL suggestion UI</li>
+        <li>Expand test suite: all pipeline components, analytics, visualisation</li>
+      </ul>
+    </div>
+    <div class="roadmap-phase">
+      <div class="rp-tag">Phase C &nbsp;·&nbsp; Weeks 17–26</div>
+      <h3>Autonomous Investigation</h3>
+      <ul>
+        <li>InvestigationPlanner: decompose complex questions into sub-questions</li>
+        <li>Multi-step query execution loop with evidence accumulation</li>
+        <li>EvidenceGraph synthesis + NarrativeSynthesiser</li>
+        <li>Investigation result in UADAResponse (evidence_graph field)</li>
+        <li>Scheduled investigation agent (cron + notification)</li>
+        <li>Evidence graph UI component (force-directed graph)</li>
+        <li>Causal analysis (dowhy integration, optional)</li>
+        <li>Cross-table dimension tables in SCL + QueryPlanner</li>
+        <li>Evaluation pipeline: BIRD + Spider 2.0 subset benchmarks</li>
+        <li>Accuracy tracking per question type per connection</li>
+        <li>pgvector migration path (if ChromaDB shows scale limits)</li>
+        <li>Documentation: SCL authoring guide, API reference, security model</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Dependency graph</h3>
+<pre class="mermaid">
+gantt
+    title TachyonIQ Implementation Roadmap
+    dateFormat  YYYY-MM-DD
+    section Phase A — Stabilise
+    Security fixes (bugs 1-5)     :crit, a1, 2026-09-07, 14d
+    Timeout enforcement           :a2, after a1, 7d
+    Redis rate limiter            :a3, after a1, 7d
+    SSE auth fix                  :a4, after a1, 5d
+    Explainability AST            :a5, after a1, 7d
+    Unit test suite foundation    :a6, after a1, 14d
+    Fiscal calendar               :a7, after a6, 7d
+    SCL hot-reload                :a8, after a7, 7d
+
+    section Phase B — Intelligence
+    Routing strategy              :b1, after a8, 14d
+    Structured ambiguity          :b2, after b1, 10d
+    Metric dependency DAG         :b3, after a8, 10d
+    Row-level security            :b4, after b3, 10d
+    Diagnostic repair agent       :b5, after b1, 14d
+    Root cause analyser           :b6, after b5, 21d
+    Evidence graph model          :b7, after b6, 14d
+    Enhanced forecasting          :b8, after a6, 14d
+    Chart improvements            :b9, after b7, 14d
+    MCP server                    :b10, after b2, 10d
+
+    section Phase C — Autonomous
+    Investigation planner         :c1, after b7, 21d
+    Multi-step execution          :c2, after c1, 14d
+    Evidence synthesis            :c3, after c2, 14d
+    Scheduled agent               :c4, after c3, 14d
+    Benchmark evaluation          :c5, after c2, 21d
+</pre>
+</section>
+
+<!-- ══ EVALUATION ══════════════════════════════════════ -->
+<section id="eval">
+  <h2>Phase 39 — Evaluation Framework</h2>
+
+  <h3>Benchmark targets</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Benchmark</th><th>Industry SOTA</th><th>Phase A target</th><th>Phase B target</th><th>Phase C target</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><strong>BIRD (execution accuracy)</strong></td>
+      <td>~72% (EX accuracy)</td>
+      <td>—</td>
+      <td>≥65% on dev split</td>
+      <td>≥70% on dev split</td>
+    </tr>
+    <tr>
+      <td><strong>Spider 2.0 (Snowflake subset)</strong></td>
+      <td>96.7% (Genloop agentic)</td>
+      <td>—</td>
+      <td>≥40% (single-turn)</td>
+      <td>≥70% (agentic)</td>
+    </tr>
+    <tr>
+      <td><strong>Internal SCL metric accuracy</strong></td>
+      <td>dbt study: ~100% in-scope</td>
+      <td>Baseline measurement</td>
+      <td>≥95% for SEMANTIC_LAYER routed queries</td>
+      <td>≥98%</td>
+    </tr>
+    <tr>
+      <td><strong>End-to-end latency p50</strong></td>
+      <td>~3s (ThoughtSpot)</td>
+      <td>Measure baseline</td>
+      <td>≤4s p50 (GPT-4o)</td>
+      <td>≤2.5s p50 (with routing)</td>
+    </tr>
+    <tr>
+      <td><strong>Security: SQL injection resistance</strong></td>
+      <td>N/A</td>
+      <td>100% (0 bypasses)</td>
+      <td>100%</td>
+      <td>100% (never degrades)</td>
+    </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Internal evaluation metrics (per turn)</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">sql_correctness</span><span class="v">Does the SQL answer the question? (human + LLM judge)</span></li>
+    <li><span class="k">routing_accuracy</span><span class="v">Was the correct routing strategy chosen? (SEMANTIC_LAYER vs LLM_SQL)</span></li>
+    <li><span class="k">viz_appropriateness</span><span class="v">Is the chart type appropriate for the data shape? (rule-based scorer)</span></li>
+    <li><span class="k">answer_grounding</span><span class="v">Does the narrative answer cite actual result values? (regex + deepeval)</span></li>
+    <li><span class="k">followup_relevance</span><span class="v">Are follow-up suggestions relevant to the result? (embedding similarity)</span></li>
+    <li><span class="k">security_violations</span><span class="v">Count of SQL validator violations (must remain 0 for safe inputs)</span></li>
+    <li><span class="k">data_quality_accuracy</span><span class="v">Does reported DQ score match actual data quality? (sample validation)</span></li>
+  </ul>
+
+  <h3>CI/CD integration</h3>
+  <p>Use the existing deepeval dependency (already in <code>pyproject.toml</code> dev deps) to run LLM-as-judge evaluation as a CI step. Separate from the unit test suite — run with <code>pytest -m evaluation</code> (marker already defined). Golden dataset: 50 curated Q→SQL→answer triples per question type, maintained in <code>tests/evaluation/golden/</code>.</p>
+
+  <details>
+    <summary>Evaluation test structure</summary>
+    <div class="details-body">
+<pre><code># tests/evaluation/test_sql_accuracy.py
+import pytest
+from deepeval import evaluate
+from deepeval.metrics import AnswerRelevancyMetric, GEvalMetric
+from deepeval.test_case import LLMTestCase
+
+@pytest.mark.evaluation
+@pytest.mark.parametrize("case", load_golden_cases("aggregation"))
+async def test_aggregation_accuracy(case, live_orchestrator):
+    result = await live_orchestrator.run(case.question, session_id="eval")
+    tc = LLMTestCase(
+        input=case.question,
+        actual_output=result.answer,
+        expected_output=case.expected_answer,
+        context=[result.sql],
+    )
+    assert_test(tc, [AnswerRelevancyMetric(threshold=0.8)])
+
+@pytest.mark.evaluation
+@pytest.mark.parametrize("case", load_golden_cases("all"))
+async def test_sql_execution_accuracy(case, live_orchestrator):
+    result = await live_orchestrator.run(case.question, session_id="eval")
+    # Golden SQL execution result vs actual
+    assert normalize_result(result.data) == normalize_result(case.expected_data)</code></pre>
+    </div>
+  </details>
+</section>
+
+<!-- ══ DEFINITION OF DONE ══════════════════════════════ -->
+<section id="done">
+  <h2>Phase 40 — Definition of "100% Complete"</h2>
+  <p>Exact, measurable criteria. TachyonIQ is 100% complete when <strong>all</strong> of the following are true simultaneously.</p>
+
+  <h3>Security — non-negotiable</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">SQL safety</span><span class="v">0 SQL injection bypasses across 500-case adversarial test suite. SQLValidator invariant unchanged.</span></li>
+    <li><span class="k">Credential hygiene</span><span class="v">0 secrets in codebase, logs, LLM prompts, or API responses. Automated secret scanning in CI.</span></li>
+    <li><span class="k">Row-level security</span><span class="v">Per-role row filters enforced and tested with multi-tenant golden dataset.</span></li>
+    <li><span class="k">RBAC enforcement</span><span class="v">can_see_sql enforced. viewer role cannot see SQL in any response.</span></li>
+    <li><span class="k">Timeout enforcement</span><span class="v">30s server-side timeout enforced on all 6 database dialects (tested).</span></li>
+  </ul>
+
+  <h3>Accuracy</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">BIRD benchmark</span><span class="v">≥70% execution accuracy on dev split.</span></li>
+    <li><span class="k">SCL metric accuracy</span><span class="v">≥98% for queries routed through SEMANTIC_LAYER on in-scope metrics.</span></li>
+    <li><span class="k">Routing accuracy</span><span class="v">≥95% correct routing strategy selection on golden dataset.</span></li>
+    <li><span class="k">Answer grounding</span><span class="v">≥90% of answers cite at least one actual result value (deepeval check).</span></li>
+  </ul>
+
+  <h3>Reliability</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">Unit test coverage</span><span class="v">≥80% line coverage on all non-LLM pipeline components.</span></li>
+    <li><span class="k">Integration tests</span><span class="v">4/4 E2E test cases pass + expanded to ≥20 cases across all question types.</span></li>
+    <li><span class="k">Runtime bugs</span><span class="v">0 known crash bugs in any supported adapter or connection type.</span></li>
+    <li><span class="k">Cloud adapters</span><span class="v">Snowflake, BigQuery, Redshift tested with real credentials in CI.</span></li>
+  </ul>
+
+  <h3>Performance</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">Latency p50</span><span class="v">≤4s end-to-end for standard aggregation queries with GPT-4o.</span></li>
+    <li><span class="k">Latency p50 (SCL path)</span><span class="v">≤2.5s for SEMANTIC_LAYER routed queries (fewer LLM calls).</span></li>
+    <li><span class="k">Concurrent users</span><span class="v">≥10 concurrent queries without timeout or rate-limit failures on ≥2 workers.</span></li>
+  </ul>
+
+  <h3>Feature completeness</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">All 11 question types</span><span class="v">All QuestionType values handled correctly with appropriate SQL, chart, and narrative.</span></li>
+    <li><span class="k">Fiscal calendar</span><span class="v">FY quarter/year time ranges produce correct date-filtered SQL.</span></li>
+    <li><span class="k">Hybrid routing</span><span class="v">Routing strategy surfaced in UI with explanation for every response.</span></li>
+    <li><span class="k">Structured ambiguity</span><span class="v">Ambiguous queries return StructuredAmbiguity chips, not free-text questions.</span></li>
+    <li><span class="k">Evidence graph</span><span class="v">Investigation queries produce EvidenceGraph with ≥3 nodes and top_conclusion.</span></li>
+    <li><span class="k">Row-level security</span><span class="v">SCL row_filters enforced across all supported dialects.</span></li>
+    <li><span class="k">SCL hot-reload</span><span class="v">SCL changes take effect within 5 seconds without restart.</span></li>
+    <li><span class="k">MCP server</span><span class="v">TachyonIQ exposed as MCP tool; tested with Claude and at least one other MCP client.</span></li>
+    <li><span class="k">Chart completeness</span><span class="v">Waterfall, treemap, forecast band overlay, anomaly overlay all implemented and tested.</span></li>
+    <li><span class="k">Explainability</span><span class="v">ExplainabilityBuilder uses AST (not regex); produces correct output for CTEs, window functions, and subqueries.</span></li>
+  </ul>
+
+  <h3>Operational</h3>
+  <ul class="kv-list" style="margin:1rem 0">
+    <li><span class="k">Observability</span><span class="v">All pipeline phases have OpenTelemetry spans; Langfuse dashboard shows per-query trace.</span></li>
+    <li><span class="k">Documentation</span><span class="v">SCL authoring guide, API reference, security model, deployment guide — all written and reviewed.</span></li>
+    <li><span class="k">CI pipeline</span><span class="v">All tests (unit + integration + evaluation subset) pass in CI on every PR merge.</span></li>
+    <li><span class="k">Secret scanning</span><span class="v">Automated secret detection (gitleaks or similar) blocks any commit containing credentials.</span></li>
+  </ul>
+
+  <div class="callout ok">
+    <strong>Approval checkpoint:</strong> This document is a research and architecture specification only. <strong>Zero code has been modified.</strong> All proposed changes require explicit approval before implementation begins. The immediate next step is approval of Phase A (Stabilise &amp; Secure) to address the three runtime crashes and the credential hygiene issue.
+  </div>
+</section>
+
+</main><!-- /content -->
+</div><!-- /layout -->
+
+<script>
+// ── Theme toggle ──────────────────────────────────────────
+function toggleTheme() {
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme');
+  if (current === 'dark') {
+    root.setAttribute('data-theme', 'light');
+  } else if (current === 'light') {
+    root.removeAttribute('data-theme');
+  } else {
+    root.setAttribute('data-theme', 'dark');
+  }
+}
+
+// ── Active nav link ───────────────────────────────────────
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('nav a[href^="#"]');
+
+function updateNav() {
+  let current = '';
+  sections.forEach(s => {
+    if (window.scrollY >= s.offsetTop - 120) current = s.id;
+  });
+  navLinks.forEach(a => {
+    a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+  });
+}
+window.addEventListener('scroll', updateNav, { passive: true });
+updateNav();
+</script>
+</body>
+</html>

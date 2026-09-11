@@ -75,7 +75,7 @@ class Forecaster:
 
     Strategy (descending preference):
     1. Holt-Winters Exponential Smoothing (statsmodels) — for ≥ 8 points
-    2. ARIMA(1,1,0) (statsmodels) — for ≥ 5 points
+    2. ARIMA (AIC-selected order, p∈{0,1,2} d∈{0,1} q∈{0,1}) — for ≥ 5 points
     3. Linear trend extrapolation — for ≥ 3 points (no external dep)
     """
 
@@ -221,18 +221,53 @@ class Forecaster:
     def _try_arima(
         self, series: list[float], periods: int
     ) -> tuple[list[float], list[float], list[float], float] | None:
+        """
+        B-01 fix: select the ARIMA order with lowest AIC from a candidate grid.
+
+        Grid: p ∈ {0, 1, 2}, d ∈ {0, 1}, q ∈ {0, 1} — 12 candidates.
+        Orders that fail to converge are silently skipped; if none succeeds
+        this method returns None so the linear fallback is used instead.
+        """
         try:
             from statsmodels.tsa.arima.model import ARIMA
 
-            model = ARIMA(series, order=(1, 1, 0))
-            fit = model.fit()
-            forecast_obj = fit.get_forecast(steps=periods)
+            _CANDIDATE_ORDERS = [
+                (p, d, q)
+                for p in (0, 1, 2)
+                for d in (0, 1)
+                for q in (0, 1)
+            ]
+
+            best_aic: float = float("inf")
+            best_fit = None
+            best_order = None
+
+            for order in _CANDIDATE_ORDERS:
+                try:
+                    fit = ARIMA(series, order=order).fit()
+                    if fit.aic < best_aic:
+                        best_aic = fit.aic
+                        best_fit = fit
+                        best_order = order
+                except Exception:
+                    continue  # order infeasible for this series length; skip
+
+            if best_fit is None:
+                logger.debug("ARIMA: no feasible order found in candidate grid")
+                return None
+
+            logger.debug(
+                "ARIMA: selected order=%s AIC=%.2f (B-01 auto-order)",
+                best_order, best_aic,
+            )
+            forecast_obj = best_fit.get_forecast(steps=periods)
             fcs = forecast_obj.predicted_mean.tolist()
             ci = forecast_obj.conf_int(alpha=0.05)
             lowers = ci.iloc[:, 0].tolist()
             uppers = ci.iloc[:, 1].tolist()
-            rmse = math.sqrt(float(fit.mse))
+            rmse = math.sqrt(float(best_fit.mse))
             return fcs, lowers, uppers, rmse
+
         except Exception as exc:
             logger.debug("ARIMA failed: %s", exc)
             return None

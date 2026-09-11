@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TachyonIQ Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* ── Token system ─────────────────────────────────────────── */
+:root {
+  --bg:         #0B1220;
+  --surface:    #101928;
+  --surface-2:  #162135;
+  --surface-3:  #1C2B42;
+  --border:     #1E3150;
+  --border-2:   #263D5C;
+  --text-1:     #E2EBF6;
+  --text-2:     #8AAAC8;
+  --text-3:     #4D7499;
+
+  --teal:       #2DD4BF;
+  --teal-dim:   #0A2926;
+  --teal-mid:   #14403C;
+  --blue:       #38BDF8;
+  --blue-dim:   #0A2033;
+  --amber:      #FBBF24;
+  --amber-dim:  #1C1200;
+  --red:        #F87171;
+  --red-dim:    #2A0808;
+  --green:      #4ADE80;
+  --green-dim:  #052210;
+  --purple:     #A78BFA;
+  --purple-dim: #160F2B;
+  --orange:     #FB923C;
+  --orange-dim: #1C0A00;
+
+  /* layer hues */
+  --l-client:   #0E1E35;
+  --l-ingress:  #0D1E32;
+  --l-orch:     #0C1C30;
+  --l-scl:      #0B1A2D;
+  --l-intel:    #0A192B;
+  --l-security: #1A0808;
+  --l-analyt:   #091725;
+  --l-response: #081623;
+  --l-data:     #071421;
+  --l-obs:      #06121F;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:         #EEF3FA;
+    --surface:    #FFFFFF;
+    --surface-2:  #E3EAF4;
+    --surface-3:  #D4E0EE;
+    --border:     #BFCFE3;
+    --border-2:   #A8BDD6;
+    --text-1:     #0B1F34;
+    --text-2:     #34577A;
+    --text-3:     #6B8FAE;
+    --teal:       #0D9488;
+    --teal-dim:   #CCFBF1;
+    --teal-mid:   #B2EDE5;
+    --blue:       #0369A1;
+    --blue-dim:   #DBEAFE;
+    --amber:      #B45309;
+    --amber-dim:  #FEF3C7;
+    --red:        #DC2626;
+    --red-dim:    #FEE2E2;
+    --green:      #16A34A;
+    --green-dim:  #DCFCE7;
+    --purple:     #7C3AED;
+    --purple-dim: #EDE9FE;
+    --orange:     #C2410C;
+    --orange-dim: #FFEDD5;
+    --l-client:   #EAF2FF;
+    --l-ingress:  #E5EDF9;
+    --l-orch:     #E0E9F7;
+    --l-scl:      #DBE5F5;
+    --l-intel:    #D6E1F3;
+    --l-security: #FFF0F0;
+    --l-analyt:   #D1DCF0;
+    --l-response: #CCD8EE;
+    --l-data:     #C7D4EC;
+    --l-obs:      #C2CFEA;
+  }
+}
+:root[data-theme="light"] {
+  --bg:         #EEF3FA;
+  --surface:    #FFFFFF;
+  --surface-2:  #E3EAF4;
+  --surface-3:  #D4E0EE;
+  --border:     #BFCFE3;
+  --border-2:   #A8BDD6;
+  --text-1:     #0B1F34;
+  --text-2:     #34577A;
+  --text-3:     #6B8FAE;
+  --teal:       #0D9488;
+  --teal-dim:   #CCFBF1;
+  --teal-mid:   #B2EDE5;
+  --blue:       #0369A1;
+  --blue-dim:   #DBEAFE;
+  --amber:      #B45309;
+  --amber-dim:  #FEF3C7;
+  --red:        #DC2626;
+  --red-dim:    #FEE2E2;
+  --green:      #16A34A;
+  --green-dim:  #DCFCE7;
+  --purple:     #7C3AED;
+  --purple-dim: #EDE9FE;
+  --orange:     #C2410C;
+  --orange-dim: #FFEDD5;
+  --l-client:   #EAF2FF;
+  --l-ingress:  #E5EDF9;
+  --l-orch:     #E0E9F7;
+  --l-scl:      #DBE5F5;
+  --l-intel:    #D6E1F3;
+  --l-security: #FFF0F0;
+  --l-analyt:   #D1DCF0;
+  --l-response: #CCD8EE;
+  --l-data:     #C7D4EC;
+  --l-obs:      #C2CFEA;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Sora', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text-1);
+  min-height: 100vh;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Theme toggle ─────────────────────────────────────────── */
+.theme-btn {
+  position: fixed; top: 1rem; right: 1rem; z-index: 200;
+  background: var(--surface); border: 1px solid var(--border-2);
+  color: var(--text-2); padding: .35rem .6rem; border-radius: 6px;
+  cursor: pointer; font: 11px/1 'Sora', sans-serif;
+  transition: all .15s;
+}
+.theme-btn:hover { border-color: var(--teal); color: var(--teal); }
+
+/* ── Page header ──────────────────────────────────────────── */
+.page-header {
+  padding: 2.5rem 3rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.page-header h1 {
+  font-size: 1.7rem; font-weight: 700; letter-spacing: -.04em;
+  color: var(--teal); margin-bottom: .25rem;
+}
+.page-header p {
+  font-size: .82rem; color: var(--text-2); max-width: 70ch;
+}
+.page-header .meta {
+  display: flex; gap: 1.5rem; margin-top: .8rem; flex-wrap: wrap;
+}
+.meta-item { font-size: .72rem; color: var(--text-3); }
+.meta-item strong { color: var(--text-2); }
+
+/* ── Legend ───────────────────────────────────────────────── */
+.legend {
+  display: flex; gap: .5rem; flex-wrap: wrap;
+  padding: .8rem 3rem; border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.legend-item {
+  display: flex; align-items: center; gap: .35rem;
+  font-size: .7rem; color: var(--text-2);
+}
+.legend-dot {
+  width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+}
+
+/* ── Main content ─────────────────────────────────────────── */
+.content {
+  padding: 2rem 3rem 4rem;
+  max-width: 1400px;
+}
+
+/* ── Section headings ─────────────────────────────────────── */
+.section-label {
+  font-size: .65rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-3); font-weight: 600; margin-bottom: .6rem;
+  padding-bottom: .4rem; border-bottom: 1px solid var(--border);
+}
+
+/* ── Architecture stack ───────────────────────────────────── */
+.arch-stack {
+  display: flex; flex-direction: column; gap: 0;
+  border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; margin-bottom: 2.5rem;
+}
+
+.arch-layer {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  min-height: 80px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.arch-layer:last-child { border-bottom: none; }
+
+.layer-label {
+  display: flex; flex-direction: column; justify-content: center;
+  padding: .8rem 1rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.layer-name {
+  font-size: .68rem; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-bottom: .2rem;
+}
+.layer-count {
+  font-size: .62rem; color: var(--text-3); font-family: 'IBM Plex Mono', monospace;
+}
+
+.layer-components {
+  display: flex; flex-wrap: wrap; align-items: center;
+  padding: .7rem .9rem; gap: .45rem;
+}
+
+/* ── Component chips ──────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .25rem .55rem; border-radius: 5px;
+  font-size: .7rem; font-weight: 500; letter-spacing: -.01em;
+  border: 1px solid transparent; white-space: nowrap;
+  position: relative;
+}
+.chip.stable {
+  background: var(--teal-dim); color: var(--teal); border-color: color-mix(in srgb, var(--teal) 20%, transparent);
+}
+.chip.gap {
+  background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 20%, transparent);
+}
+.chip.bug {
+  background: var(--red-dim); color: var(--red); border-color: color-mix(in srgb, var(--red) 20%, transparent);
+}
+.chip.new {
+  background: var(--blue-dim); color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+}
+.chip.critical {
+  background: #2A0A0A; color: var(--red);
+  border: 1.5px solid var(--red); font-weight: 700;
+}
+.chip.llm {
+  background: var(--purple-dim); color: var(--purple); border-color: color-mix(in srgb, var(--purple) 25%, transparent);
+}
+.chip .dot { font-size: .55rem; }
+.chip .tag {
+  font-size: .58rem; opacity: .75; font-family: 'IBM Plex Mono', monospace;
+  background: rgba(255,255,255,.06); padding: .05rem .25rem; border-radius: 3px;
+}
+
+/* Layer colour bands */
+.l-client   { background: var(--l-client); }
+.l-ingress  { background: var(--l-ingress); }
+.l-orch     { background: var(--l-orch); }
+.l-scl      { background: var(--l-scl); }
+.l-intel    { background: var(--l-intel); }
+.l-security { background: var(--l-security); }
+.l-analyt   { background: var(--l-analyt); }
+.l-response { background: var(--l-response); }
+.l-data     { background: var(--l-data); }
+.l-obs      { background: var(--l-obs); }
+
+/* ── Connector arrows ─────────────────────────────────────── */
+.connector {
+  display: flex; align-items: center; justify-content: center;
+  height: 22px; color: var(--text-3); font-size: .8rem;
+  letter-spacing: .05em;
+}
+
+/* ── Two-column grid for diagrams ─────────────────────────── */
+.diagram-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+}
+@media (max-width: 900px) {
+  .diagram-grid { grid-template-columns: 1fr; }
+  .content { padding: 1.5rem; }
+  .page-header { padding: 1.5rem; }
+  .legend { padding: .8rem 1.5rem; }
+}
+
+/* ── Mermaid diagram card ─────────────────────────────────── */
+.diagram-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.diagram-card-header {
+  padding: .7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: .72rem; font-weight: 600; color: var(--text-2);
+  letter-spacing: .05em; text-transform: uppercase;
+}
+.diagram-card-body {
+  padding: 1rem;
+  overflow-x: auto;
+}
+.diagram-card-body pre.mermaid {
+  font-size: 11px;
+}
+
+/* ── Data store map ───────────────────────────────────────── */
+.store-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: .75rem; margin-bottom: 2.5rem;
+}
+.store-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .8rem 1rem;
+}
+.store-card h4 {
+  font-size: .72rem; font-weight: 700; color: var(--text-1);
+  margin-bottom: .4rem; letter-spacing: -.01em;
+}
+.store-card p {
+  font-size: .68rem; color: var(--text-2); line-height: 1.5;
+}
+.store-type {
+  display: inline-block;
+  font-size: .6rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  padding: .1rem .4rem; border-radius: 3px; margin-bottom: .4rem;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.store-type.relational { background: var(--blue-dim); color: var(--blue); }
+.store-type.vector     { background: var(--purple-dim); color: var(--purple); }
+.store-type.cache      { background: var(--orange-dim); color: var(--orange); }
+.store-type.embedded   { background: var(--teal-dim); color: var(--teal); }
+
+/* ── Component detail table ───────────────────────────────── */
+.comp-table {
+  width: 100%; border-collapse: collapse;
+  font-size: .72rem; margin-bottom: 2.5rem;
+}
+.comp-table th {
+  padding: .45rem .7rem; text-align: left;
+  background: var(--surface-2); border-bottom: 2px solid var(--border);
+  font-size: .65rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-3); font-weight: 600;
+}
+.comp-table td {
+  padding: .4rem .7rem; border-bottom: 1px solid var(--border);
+  color: var(--text-2); vertical-align: top;
+}
+.comp-table tr:hover td { background: var(--surface-2); }
+.comp-table .mono {
+  font-family: 'IBM Plex Mono', monospace; font-size: .68rem; color: var(--teal);
+}
+.comp-table .status-pill {
+  display: inline-block; padding: .1rem .4rem;
+  border-radius: 3px; font-size: .62rem; font-weight: 600;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.status-stable  { background: var(--teal-dim);   color: var(--teal); }
+.status-gap     { background: var(--amber-dim);  color: var(--amber); }
+.status-bug     { background: var(--red-dim);    color: var(--red); }
+.status-new     { background: var(--blue-dim);   color: var(--blue); }
+.status-critical{ background: var(--red-dim);    color: var(--red); border: 1px solid var(--red); }
+.status-fixed   { background: var(--green-dim);  color: var(--green); }
+
+/* ── Callout ──────────────────────────────────────────────── */
+.callout {
+  border-radius: 7px; padding: .8rem 1rem;
+  font-size: .78rem; margin-bottom: 1.5rem; line-height: 1.6;
+  border-left: 3px solid;
+}
+.callout.warn { background: var(--red-dim); border-color: var(--red); color: var(--text-1); }
+.callout.info { background: var(--blue-dim); border-color: var(--blue); color: var(--text-1); }
+.callout.ok   { background: var(--teal-dim); border-color: var(--teal); color: var(--text-1); }
+.callout strong { color: var(--text-1); font-weight: 700; }
+.callout code {
+  font-family: 'IBM Plex Mono', monospace; font-size: .85em;
+  background: rgba(255,255,255,.08); padding: .1em .35em; border-radius: 3px;
+}
+
+/* ── Section gap ──────────────────────────────────────────── */
+.section-gap { margin-bottom: 2rem; }
+</style>
+</head>
+<body>
+
+<button class="theme-btn" onclick="(function(){var r=document.documentElement,t=r.getAttribute('data-theme');if(!t||t==='dark'){r.setAttribute('data-theme','light')}else{r.setAttribute('data-theme','dark')}})()">☀ / ☾</button>
+
+<!-- ══ HEADER ════════════════════════════════════════════════ -->
+<div class="page-header">
+  <h1>TachyonIQ — Proposed Architecture</h1>
+  <p>Full system architecture — current components, known gaps, confirmed bugs, and all Phase A–C proposed additions. Components marked ★ NEW are proposed; all others are current.</p>
+  <div class="meta">
+    <div class="meta-item"><strong>Stack</strong> Python · FastAPI · PydanticAI · SQLGlot</div>
+    <div class="meta-item"><strong>LLM calls / query</strong> 3 (Intent · SQL · Insight)</div>
+    <div class="meta-item"><strong>DB dialects</strong> PG · MySQL · SQLite · Snowflake · BigQuery · Redshift · DuckDB</div>
+    <div class="meta-item"><strong>Source files</strong> 60</div>
+    <div class="meta-item"><strong>Pipeline phases</strong> 10 current → 14 proposed</div>
+  </div>
+</div>
+
+<!-- ══ LEGEND ════════════════════════════════════════════════ -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#0D9488"></div>Stable — working, no known issues</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FBBF24"></div>Gap — working but incomplete or fragile</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#F87171"></div>Bug — crashes at runtime in this path</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#38BDF8"></div>★ New — proposed addition, not yet implemented</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#A78BFA"></div>LLM — PydanticAI agent call</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#F87171; border:1.5px solid #F87171"></div>CRITICAL — SQLValidator invariant (never move)</div>
+</div>
+
+<!-- ══ MAIN CONTENT ══════════════════════════════════════════ -->
+<div class="content">
+
+<!-- ═══ ARCHITECTURE STACK ════════════════════════════════ -->
+<div class="section-label">Full System Architecture — Layer View</div>
+
+<div class="arch-stack">
+
+  <!-- CLIENT -->
+  <div class="arch-layer l-client">
+    <div class="layer-label">
+      <div class="layer-name">Client</div>
+      <div class="layer-count">3 surfaces</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">Chat UI SPA <span class="tag">GET /</span></span>
+      <span class="chip stable">REST API clients <span class="tag">POST /query</span></span>
+      <span class="chip stable">SSE stream <span class="tag">GET /query/stream</span></span>
+      <span class="chip new">★ MCP Server <span class="tag">Phase C</span></span>
+    </div>
+  </div>
+
+  <!-- INGRESS -->
+  <div class="arch-layer l-ingress">
+    <div class="layer-label">
+      <div class="layer-name">Ingress</div>
+      <div class="layer-count">FastAPI</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">AuthMiddleware <span class="tag">API key + JWT</span></span>
+      <span class="chip stable">RBAC <span class="tag">admin · analyst · viewer</span></span>
+      <span class="chip gap">can_see_sql enforcement <span class="tag">gap: viewer sees SQL</span></span>
+      <span class="chip stable">RateLimiter <span class="tag">in-process</span></span>
+      <span class="chip new">★ Redis rate limiter <span class="tag">Phase A</span></span>
+      <span class="chip gap">X-Forwarded-For validation <span class="tag">gap</span></span>
+      <span class="chip gap">SSE endpoint auth <span class="tag">gap</span></span>
+    </div>
+  </div>
+
+  <!-- ORCHESTRATION -->
+  <div class="arch-layer l-orch">
+    <div class="layer-label">
+      <div class="layer-name">Orchestration</div>
+      <div class="layer-count">1 orchestrator</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">PipelineOrchestrator <span class="tag">10 phases</span></span>
+      <span class="chip stable">ConversationManager <span class="tag">Redis / in-memory</span></span>
+      <span class="chip stable">ConversationStore <span class="tag">turn compression</span></span>
+      <span class="chip new">★ RoutingStrategy <span class="tag">SEMANTIC_LAYER | LLM_SQL | HYBRID</span></span>
+      <span class="chip new">★ Investigation Agent <span class="tag">async multi-step</span></span>
+    </div>
+  </div>
+
+  <!-- SCL -->
+  <div class="arch-layer l-scl">
+    <div class="layer-label">
+      <div class="layer-name">Semantic Layer</div>
+      <div class="layer-count">SCL — YAML</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">SCLLoader <span class="tag">YAML 1.2 safe</span></span>
+      <span class="chip stable">SCLManager <span class="tag">get_allowed_tables()</span></span>
+      <span class="chip stable">SCLReflector <span class="tag">DB introspection</span></span>
+      <span class="chip stable">SecurityPolicy <span class="tag">excluded tables/cols</span></span>
+      <span class="chip stable">HybridRetriever <span class="tag">Chroma + BM25, RRF k=60</span></span>
+      <span class="chip stable">SchemaLinker <span class="tag">security filter</span></span>
+      <span class="chip stable">Embedder <span class="tag">BAAI/bge-small-en</span></span>
+      <span class="chip gap">Fiscal calendar <span class="tag">gap: NYI, logs warning</span></span>
+      <span class="chip new">★ Metric DAG <span class="tag">Phase B</span></span>
+      <span class="chip new">★ Row-Level Security <span class="tag">Phase B</span></span>
+      <span class="chip new">★ Hot-reload <span class="tag">Phase A</span></span>
+      <span class="chip new">★ Certified Q&amp;A <span class="tag">Phase B</span></span>
+      <span class="chip new">★ Governance flywheel <span class="tag">Phase C</span></span>
+    </div>
+  </div>
+
+  <!-- INTELLIGENCE -->
+  <div class="arch-layer l-intel">
+    <div class="layer-label">
+      <div class="layer-name">Intelligence</div>
+      <div class="layer-count">3 LLM calls</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip llm">IntentExtractor <span class="tag">LLM #1 → AnalyticalIntent</span></span>
+      <span class="chip stable">QueryPlanner <span class="tag">deterministic · 7 dialects · BFS joins</span></span>
+      <span class="chip llm">SQLGenerator <span class="tag">LLM #2 → SQL string</span></span>
+      <span class="chip llm">InsightGenerator <span class="tag">LLM #3 → GeneratedInsights</span></span>
+      <span class="chip stable">AnalyticalIntent <span class="tag">11 QuestionTypes</span></span>
+      <span class="chip new">★ StructuredAmbiguity <span class="tag">Phase B</span></span>
+      <span class="chip new">★ Diagnostic Repair Agent <span class="tag">Phase A · ≤3 retries</span></span>
+    </div>
+  </div>
+
+  <!-- SECURITY -->
+  <div class="arch-layer l-security">
+    <div class="layer-label">
+      <div class="layer-name">Security</div>
+      <div class="layer-count">CRITICAL</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip critical">⚠ SQLValidator <span class="tag">9-rule AST · inside repair loop · violation = HALT</span></span>
+      <span class="chip stable">Allowlist <span class="tag">frozenset from SCL at boot</span></span>
+      <span class="chip stable">Comment injection <span class="tag">-- and /* blocked</span></span>
+      <span class="chip stable">Non-SELECT block <span class="tag">12 forbidden statement types</span></span>
+      <span class="chip stable">System schema block <span class="tag">16 schemas</span></span>
+      <span class="chip stable">Dangerous functions <span class="tag">32 blocked</span></span>
+      <span class="chip stable">Subquery depth ≤3 <span class="tag">AST count</span></span>
+      <span class="chip stable">QueryExecutor <span class="tag">30s timeout · 1 000-row cap</span></span>
+      <span class="chip gap">PG/MySQL timeout <span class="tag">gap: advisory-only</span></span>
+      <span class="chip stable">Read-only probe <span class="tag">heuristic check at connect</span></span>
+      <span class="chip new">★ Server-side timeout <span class="tag">Phase A</span></span>
+    </div>
+  </div>
+
+  <!-- ANALYTICS -->
+  <div class="arch-layer l-analyt">
+    <div class="layer-label">
+      <div class="layer-name">Analytics Engine</div>
+      <div class="layer-count">7 components</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">ResultAnalyser <span class="tag">Pandas + DuckDB OLAP</span></span>
+      <span class="chip stable">Trend detection <span class="tag">±5% threshold</span></span>
+      <span class="chip stable">Outlier detection <span class="tag">z-score &gt; 3.0</span></span>
+      <span class="chip stable">Forecaster <span class="tag">Holt-Winters → ARIMA(1,1,0) → linear</span></span>
+      <span class="chip stable">AnomalyDetector <span class="tag">Isolation Forest, contamination=0.05</span></span>
+      <span class="chip stable">CorrelationAnalyser <span class="tag">Pearson / Spearman</span></span>
+      <span class="chip stable">DataQualityChecker <span class="tag">nulls · dups · type</span></span>
+      <span class="chip gap">ExplainabilityBuilder <span class="tag">gap: regex → needs AST</span></span>
+      <span class="chip new">★ RCA Engine <span class="tag">Phase B · STL decomp</span></span>
+      <span class="chip new">★ EvidenceGraph <span class="tag">Phase B</span></span>
+      <span class="chip new">★ Contextual Anomaly <span class="tag">Phase B · ADTK</span></span>
+      <span class="chip new">★ AST Explainability <span class="tag">Phase A</span></span>
+    </div>
+  </div>
+
+  <!-- RESPONSE -->
+  <div class="arch-layer l-response">
+    <div class="layer-label">
+      <div class="layer-name">Response</div>
+      <div class="layer-count">4 components</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">VisualisationGenerator <span class="tag">17 chart types · Altair → Vega-Lite</span></span>
+      <span class="chip stable">FollowUpEngine <span class="tag">deterministic template suggestions</span></span>
+      <span class="chip stable">DataProfiler <span class="tag">per-col stats · no PII to LLM</span></span>
+      <span class="chip stable">NarrativeComposer <span class="tag">UADAResponse builder</span></span>
+      <span class="chip gap">Chart responsiveness <span class="tag">gap: fixed width SVG</span></span>
+      <span class="chip gap">SavedAnalysisStore list() <span class="tag">gap: returns full blob</span></span>
+      <span class="chip new">★ Routing transparency chip <span class="tag">Phase A</span></span>
+      <span class="chip new">★ Ambiguity resolution UI <span class="tag">Phase B</span></span>
+    </div>
+  </div>
+
+  <!-- DATA -->
+  <div class="arch-layer l-data">
+    <div class="layer-label">
+      <div class="layer-name">Data Stores</div>
+      <div class="layer-count">5 stores</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">PostgreSQL / MySQL / SQLite / MSSQL <span class="tag">SQLAlchemy</span></span>
+      <span class="chip bug">Snowflake <span class="tag">BUG-2: column_names field</span></span>
+      <span class="chip bug">BigQuery <span class="tag">BUG-2 + BUG-4: tempfile leak</span></span>
+      <span class="chip bug">Redshift <span class="tag">BUG-2: column_names field</span></span>
+      <span class="chip bug">ConnectionManager <span class="tag">BUG-1: list vs dict</span></span>
+      <span class="chip stable">ChromaDB <span class="tag">vector store · schema embeddings</span></span>
+      <span class="chip stable">Redis <span class="tag">conversation state</span></span>
+      <span class="chip new">★ Redis <span class="tag">+ rate limiter (Phase A)</span></span>
+      <span class="chip stable">SQLite <span class="tag">SavedAnalysisStore</span></span>
+    </div>
+  </div>
+
+  <!-- OBSERVABILITY -->
+  <div class="arch-layer l-obs">
+    <div class="layer-label">
+      <div class="layer-name">Observability</div>
+      <div class="layer-count">4 components</div>
+    </div>
+    <div class="layer-components">
+      <span class="chip stable">AuditLogger <span class="tag">rotating JSONL · SHA-256(SQL)[:16]</span></span>
+      <span class="chip stable">OpenTelemetry <span class="tag">→ Langfuse / Logfire</span></span>
+      <span class="chip stable">LLM usage tracker <span class="tag">per-turn token accounting</span></span>
+      <span class="chip new">★ deepeval CI <span class="tag">Phase B · BIRD + Spider 2.0 targets</span></span>
+      <span class="chip new">★ Benchmark harness <span class="tag">Phase B</span></span>
+    </div>
+  </div>
+
+</div><!-- /arch-stack -->
+
+<!-- ═══ SECURITY CRITICAL BOX ══════════════════════════════ -->
+<div class="callout warn section-gap">
+  <strong>⚠ CRITICAL INVARIANT — NEVER MOVE:</strong> &nbsp;<code>SQLValidator.validate()</code> runs <em>inside</em> the SQL repair loop, before <em>every</em> execution attempt. A security violation triggers an immediate halt with zero retries — no retry logic, no LLM re-generation, no fallback. The <code>DiagnosticRepairAgent</code> (proposed, Phase A) wraps only SQL-syntax errors; it calls <code>SQLValidator</code> again on each attempt before executing. This invariant must survive all future refactoring.
+</div>
+
+<!-- ═══ PIPELINE FLOW DIAGRAMS ═════════════════════════════ -->
+<div class="section-label">Pipeline Flow — Proposed Enhanced Architecture</div>
+
+<div class="diagram-grid">
+
+  <div class="diagram-card">
+    <div class="diagram-card-header">Main Query Pipeline — POST /query</div>
+    <div class="diagram-card-body">
+<pre class="mermaid">
+flowchart TD
+    A([POST /query]) --> B[Middleware\nRequestId · RateLimiter → Redis ★\nAuth · RBAC]
+    B --> C[Load ConversationState\nRedis / in-memory]
+    C --> D[SchemaLinker\nHybridRetriever × 4 doc types\nBM25 + ChromaDB → RRF → Security Filter]
+    D --> E[IntentExtractor 🤖 LLM-1\nPydanticAI → AnalyticalIntent\n11 QuestionTypes · StructuredAmbiguity ★]
+
+    E --> F{Ambiguous?\nor Out-of-scope?}
+    F -- Ambiguous --> FA[Return StructuredAmbiguity ★\nOptions + confidence chips]
+    F -- OOS --> FB([Terminal: clarification])
+    F -- No --> G
+
+    G{RoutingStrategy ★} -- SEMANTIC_LAYER --> H1[QueryPlanner DETERMINISTIC\nSCL metric formulas\n7 dialects · BFS joins]
+    G -- LLM_SQL --> H2[SQLGenerator 🤖 LLM-2\nPydanticAI → raw SQL]
+    G -- HYBRID --> H3[SCL metric anchor\n+ LLM dimension layer]
+
+    H1 --> I[SQLValidator ⚠ CRITICAL\n9-rule AST gate]
+    H2 --> I
+    H3 --> I
+
+    I -- VIOLATION --> HALT([HALT — SecurityViolation\nNo retry — ever])
+    I -- Safe --> J[QueryExecutor\n30s timeout · 1 000-row cap]
+
+    J -- SQL error --> K[DiagnosticRepairAgent ★\n→ SQLValidator again\n→ retry ≤ 3×]
+    K --> I
+    J -- Success --> L[ResultAnalyser\nPandas + DuckDB OLAP\nTrend ± 5% · Outlier z>3]
+
+    L --> M[Optional Analytics\nForecaster HW→ARIMA→linear\nAnomalyDetector Isolation Forest\nRCA Engine ★ STL decomp]
+
+    M --> N[EvidenceGraph ★\nNodes: metric · segment\nEdges: causes · correlates]
+
+    N --> O[VisualisationGenerator\n17 chart types · Altair → Vega-Lite]
+    O --> P[Post-processing\nFollowUpEngine · DataQualityChecker\nExplainabilityBuilder ★ AST\nInsightGenerator 🤖 LLM-3]
+    P --> Q[ConversationStore.save\nAuditLogger SHA-256 SQL]
+    Q --> R([UADAResponse HTTP 200\nrouting_strategy chip ★])
+
+    style I fill:#2A0808,stroke:#F87171,color:#F87171,stroke-width:2px
+    style HALT fill:#2A0808,stroke:#F87171,color:#F87171
+    style K fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style N fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style FA fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style G fill:#160F2B,stroke:#A78BFA,color:#A78BFA
+</pre>
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <div class="diagram-card-header">★ Investigation Agent — Autonomous Loop (Phase C)</div>
+    <div class="diagram-card-body">
+<pre class="mermaid">
+flowchart TD
+    T([Trigger: schedule / anomaly spike]) --> P[InvestigationPlanner ★\nDecompose goal\ninto sub-questions]
+    P --> Q1[Sub-query 1\nPipeline → Evidence node A]
+    P --> Q2[Sub-query 2\nPipeline → Evidence node B]
+    P --> Q3[Sub-query N\nPipeline → Evidence node N]
+    Q1 & Q2 & Q3 --> E[EvidenceGraph ★\nMerge all nodes + edges]
+    E --> H{Confidence\nthreshold met?}
+    H -- No --> P2[Re-plan ★\nAdd clarifying sub-query]
+    P2 --> Q4[Sub-query N+1\nPipeline → Evidence node]
+    Q4 --> E
+    H -- Yes --> R[NarrativeComposer\nEvidence-graded report]
+    R --> S([Deliver: SSE push\nor scheduled notification])
+
+    style P fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style E fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style P2 fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style R fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+</pre>
+    </div>
+  </div>
+
+</div><!-- /diagram-grid -->
+
+<div class="diagram-grid">
+
+  <div class="diagram-card">
+    <div class="diagram-card-header">Routing Strategy Decision — RoutingStrategy ★</div>
+    <div class="diagram-card-body">
+<pre class="mermaid">
+flowchart TD
+    I([AnalyticalIntent]) --> A{All measures\nresolve to\nSCL metrics?}
+    A -- Yes → SEMANTIC_LAYER --> B[QueryPlanner builds\ndeterministic SQL\nfrom SCL formulas]
+    A -- Partial --> C{Any measures\nin SCL?}
+    C -- Yes → HYBRID --> D[SCL metric formula\nanchored + LLM adds\ndimension / filter layer]
+    C -- No → LLM_SQL --> E[Full SQLGenerator\nPydanticAI → SQL]
+    B & D & E --> F([SQLValidator ⚠])
+
+    G{governance_signal?} -- Queried ≥3× --> H[Suggest: formalise\nas SCL metric ★]
+    E --> G
+
+    style F fill:#2A0808,stroke:#F87171,color:#F87171
+    style H fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+    style G fill:#0A2033,stroke:#38BDF8,color:#38BDF8
+</pre>
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <div class="diagram-card-header">Security Layer — SQLValidator Invariant Detail</div>
+    <div class="diagram-card-body">
+<pre class="mermaid">
+flowchart TD
+    SQL([Raw SQL string]) --> V{SQLValidator\n9-rule AST check}
+    V -- Rule 1 EMPTY_QUERY --> HALT1([HALT — no retry])
+    V -- Rule 2 COMMENT_INJECTION --> HALT2([HALT — no retry])
+    V -- Rule 3 MULTIPLE_STATEMENTS --> HALT3([HALT — no retry])
+    V -- Rule 4 NON_SELECT --> HALT4([HALT — no retry])
+    V -- Rule 5 SYSTEM_SCHEMA --> HALT5([HALT — no retry])
+    V -- Rule 6 TABLE_NOT_ALLOWLIST --> HALT6([HALT — no retry])
+    V -- Rule 7 DANGEROUS_FUNCTION --> HALT7([HALT — no retry])
+    V -- Rule 8 SUBQUERY_DEPTH_3 --> HALT8([HALT — no retry])
+    V -- Rule 9 LIMIT inject --> V2[Auto-inject LIMIT\ninto top-level SELECT]
+    V -- All rules pass --> EXEC([QueryExecutor])
+
+    style V fill:#2A0808,stroke:#F87171,color:#F87171,stroke-width:2px
+    style HALT1 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT2 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT3 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT4 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT5 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT6 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT7 fill:#2A0808,stroke:#F87171,color:#F87171
+    style HALT8 fill:#2A0808,stroke:#F87171,color:#F87171
+</pre>
+    </div>
+  </div>
+
+</div><!-- /diagram-grid -->
+
+<!-- ═══ DATA STORES ═══════════════════════════════════════ -->
+<div class="section-label">Data Store Map</div>
+<div class="store-grid section-gap">
+
+  <div class="store-card">
+    <div class="store-type relational">Relational</div>
+    <h4>User Databases</h4>
+    <p>PG · MySQL · SQLite · MSSQL · Snowflake† · BigQuery† · Redshift†<br>
+    <br>Read-only credentials required. SQLAlchemy engine + 30s timeout. <code>†</code> = bug in cloud adapters (BUG-2).</p>
+  </div>
+
+  <div class="store-card">
+    <div class="store-type vector">Vector</div>
+    <h4>ChromaDB</h4>
+    <p>Stores SCL schema embeddings (tables, columns, metrics, glossary). HybridRetriever performs 4 separate retrieval calls per doc_type, merged via RRF (k=60) with BM25.</p>
+  </div>
+
+  <div class="store-card">
+    <div class="store-type cache">Cache / Queue</div>
+    <h4>Redis</h4>
+    <p>Current: conversation state + turn compression.<br>★ Phase A: also rate limiter (replaces in-process per-worker counter).</p>
+  </div>
+
+  <div class="store-card">
+    <div class="store-type embedded">Embedded SQLite</div>
+    <h4>SavedAnalysisStore</h4>
+    <p>Thread-safe SQLite CRUD for saved analyses. Gap: <code>list()</code> returns full response blob — should return summary only.</p>
+  </div>
+
+  <div class="store-card">
+    <div class="store-type relational">Config YAML</div>
+    <h4>SCL — semantic_context.yaml</h4>
+    <p>Defines tables, metrics, joins, glossary, examples, security policy. Boot-loaded; <code>get_allowed_tables()</code> frozenset feeds SQLValidator. ★ Hot-reload proposed (Phase A).</p>
+  </div>
+
+  <div class="store-card">
+    <div class="store-type embedded">Filesystem</div>
+    <h4>AuditLogger</h4>
+    <p>Rotating JSONL. Stores SHA-256(SQL)[:16] hash — never raw SQL. OpenTelemetry spans → Langfuse / Logfire.</p>
+  </div>
+
+</div>
+
+<!-- ═══ COMPONENT STATUS TABLE ════════════════════════════ -->
+<div class="section-label">Component Registry — Current vs Proposed</div>
+
+<div style="overflow-x:auto; margin-bottom:2.5rem;">
+<table class="comp-table">
+  <thead>
+    <tr>
+      <th>Component</th>
+      <th>Module</th>
+      <th>Layer</th>
+      <th>Status</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>PipelineOrchestrator</td><td class="mono">pipeline/orchestrator.py</td><td>Orchestration</td><td><span class="status-pill status-stable">Stable</span></td><td>Drives 10 phases; owns repair loop</td></tr>
+    <tr><td>ConversationStore</td><td class="mono">pipeline/conversation_store.py</td><td>Orchestration</td><td><span class="status-pill status-stable">Stable</span></td><td>Redis or in-memory; turn compression</td></tr>
+    <tr><td>SCLLoader / SCLManager</td><td class="mono">scl/loader.py, scl/manager.py</td><td>SCL</td><td><span class="status-pill status-stable">Stable</span></td><td>YAML 1.2 safe parse; allowlist gating</td></tr>
+    <tr><td>HybridRetriever</td><td class="mono">retrieval/hybrid.py</td><td>SCL</td><td><span class="status-pill status-stable">Stable</span></td><td>RRF merge of Chroma + BM25, k=60</td></tr>
+    <tr><td>Embedder</td><td class="mono">retrieval/embedder.py</td><td>SCL</td><td><span class="status-pill status-stable">Stable</span></td><td>BAAI/bge-small-en SentenceTransformer</td></tr>
+    <tr><td>IntentExtractor</td><td class="mono">pipeline/intent_extractor.py</td><td>Intelligence</td><td><span class="status-pill status-stable">Stable</span></td><td>PydanticAI → AnalyticalIntent (LLM #1)</td></tr>
+    <tr><td>QueryPlanner</td><td class="mono">pipeline/query_planner.py</td><td>Intelligence</td><td><span class="status-pill status-gap">Gap</span></td><td>Fiscal calendar NYI; logs warning, skips filter</td></tr>
+    <tr><td>SQLGenerator</td><td class="mono">pipeline/sql_generator.py</td><td>Intelligence</td><td><span class="status-pill status-stable">Stable</span></td><td>PydanticAI → SQL string; code-fence strip (LLM #2)</td></tr>
+    <tr><td>SQLValidator</td><td class="mono">pipeline/sql_validator.py</td><td>Security</td><td><span class="status-pill status-critical">CRITICAL</span></td><td>9-rule AST gate; NEVER move outside repair loop</td></tr>
+    <tr><td>ResultAnalyser</td><td class="mono">pipeline/result_analyser.py</td><td>Analytics</td><td><span class="status-pill status-stable">Stable</span></td><td>Pandas + DuckDB OLAP; trend ±5%; outlier z>3</td></tr>
+    <tr><td>Forecaster</td><td class="mono">analytics/forecast.py</td><td>Analytics</td><td><span class="status-pill status-stable">Stable</span></td><td>Holt-Winters (≥8) → ARIMA(1,1,0) (≥5) → linear (≥3)</td></tr>
+    <tr><td>AnomalyDetector</td><td class="mono">analytics/anomaly.py</td><td>Analytics</td><td><span class="status-pill status-stable">Stable</span></td><td>Isolation Forest, contamination=0.05</td></tr>
+    <tr><td>ExplainabilityBuilder</td><td class="mono">analytics/explainability.py</td><td>Analytics</td><td><span class="status-pill status-gap">Fragile</span></td><td>Regex SQL decomposition — must be replaced with AST walker (Phase A)</td></tr>
+    <tr><td>VisualisationGenerator</td><td class="mono">pipeline/viz_generator.py</td><td>Response</td><td><span class="status-pill status-gap">Gap</span></td><td>17 chart types; charts not responsive (fixed-width SVG)</td></tr>
+    <tr><td>FollowUpEngine</td><td class="mono">pipeline/followup_engine.py</td><td>Response</td><td><span class="status-pill status-fixed">Fixed</span></td><td>col.column_name fix applied; template-driven</td></tr>
+    <tr><td>InsightGenerator</td><td class="mono">pipeline/insight_generator.py</td><td>Response</td><td><span class="status-pill status-stable">Stable</span></td><td>PydanticAI → GeneratedInsights (LLM #3); sees summaries only</td></tr>
+    <tr><td>AuthMiddleware</td><td class="mono">api/middleware/auth.py</td><td>Ingress</td><td><span class="status-pill status-gap">Gap</span></td><td>can_see_sql not enforced in query route — viewer role sees SQL</td></tr>
+    <tr><td>DatabaseConnectionManager</td><td class="mono">db/connection_manager.py</td><td>Data</td><td><span class="status-pill status-bug">BUG-1</span></td><td>discover_schema() calls .values() on a list → AttributeError</td></tr>
+    <tr><td>SnowflakeAdapter</td><td class="mono">db/adapters/snowflake.py</td><td>Data</td><td><span class="status-pill status-bug">BUG-2</span></td><td>QueryExecutionResult(columns=…) should be column_names=</td></tr>
+    <tr><td>BigQueryAdapter</td><td class="mono">db/adapters/bigquery.py</td><td>Data</td><td><span class="status-pill status-bug">BUG-2+4</span></td><td>column_names field + tempfile never cleaned up</td></tr>
+    <tr><td>RedshiftAdapter</td><td class="mono">db/adapters/redshift.py</td><td>Data</td><td><span class="status-pill status-bug">BUG-2</span></td><td>QueryExecutionResult(columns=…) should be column_names=</td></tr>
+    <tr><td>SavedAnalysisStore</td><td class="mono">db/saved_analysis_store.py</td><td>Data</td><td><span class="status-pill status-gap">Gap</span></td><td>list() returns full response blob; should paginate summaries</td></tr>
+    <!-- Proposed -->
+    <tr style="opacity:.85;"><td>★ RoutingStrategy</td><td class="mono">models/intent.py</td><td>Orchestration</td><td><span class="status-pill status-new">★ Phase A</span></td><td>Enum: SEMANTIC_LAYER | LLM_SQL | HYBRID; exposed in UADAResponse</td></tr>
+    <tr style="opacity:.85;"><td>★ StructuredAmbiguity</td><td class="mono">models/intent.py</td><td>Intelligence</td><td><span class="status-pill status-new">★ Phase B</span></td><td>Options + confidence scores; returned as interactive chips</td></tr>
+    <tr style="opacity:.85;"><td>★ DiagnosticRepairAgent</td><td class="mono">pipeline/repair_agent.py</td><td>Intelligence</td><td><span class="status-pill status-new">★ Phase A</span></td><td>SQL-error repair loop ≤3 retries; SQLValidator on each attempt</td></tr>
+    <tr style="opacity:.85;"><td>★ EvidenceGraph</td><td class="mono">models/evidence.py</td><td>Analytics</td><td><span class="status-pill status-new">★ Phase B</span></td><td>Nodes + edges; root cause chain; confidence score</td></tr>
+    <tr style="opacity:.85;"><td>★ RCA Engine</td><td class="mono">analytics/rca.py</td><td>Analytics</td><td><span class="status-pill status-new">★ Phase B</span></td><td>STL decomposition; feeds EvidenceGraph</td></tr>
+    <tr style="opacity:.85;"><td>★ Investigation Agent</td><td class="mono">agents/investigation.py</td><td>Orchestration</td><td><span class="status-pill status-new">★ Phase C</span></td><td>Async multi-step; re-plans until confidence threshold met</td></tr>
+    <tr style="opacity:.85;"><td>★ MCP Server</td><td class="mono">mcp/server.py</td><td>Client</td><td><span class="status-pill status-new">★ Phase C</span></td><td>Exposes UADA as MCP tool for Cursor/Claude/other agents</td></tr>
+    <tr style="opacity:.85;"><td>★ SCL Hot-reload</td><td class="mono">scl/manager.py</td><td>SCL</td><td><span class="status-pill status-new">★ Phase A</span></td><td>inotify / watchdog; SIGHUP; atomic swap of frozenset</td></tr>
+    <tr style="opacity:.85;"><td>★ Metric DAG</td><td class="mono">scl/dag.py</td><td>SCL</td><td><span class="status-pill status-new">★ Phase B</span></td><td>Dependency graph: metric A uses metric B; circular dep detection</td></tr>
+    <tr style="opacity:.85;"><td>★ Row-Level Security</td><td class="mono">scl/rls.py</td><td>SCL</td><td><span class="status-pill status-new">★ Phase B</span></td><td>Per-role row_filters injected into every query at planning time</td></tr>
+    <tr style="opacity:.85;"><td>★ deepeval CI</td><td class="mono">tests/eval/</td><td>Observability</td><td><span class="status-pill status-new">★ Phase B</span></td><td>BIRD + Spider 2.0 targets; LLM-as-judge; nightly CI gate</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ═══ PROPOSED MODEL SKETCHES ═══════════════════════════ -->
+<div class="section-label">Proposed Models — Code Sketches</div>
+
+<div class="diagram-grid section-gap">
+
+<div class="diagram-card">
+  <div class="diagram-card-header">models/intent.py — Proposed additions</div>
+  <div class="diagram-card-body">
+<pre style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--text-1);line-height:1.7;white-space:pre-wrap;"><span style="color:var(--blue)">class</span> <span style="color:var(--teal)">RoutingStrategy</span>(str, Enum):
+    SEMANTIC_LAYER = <span style="color:var(--amber)">"semantic_layer"</span>
+    LLM_SQL        = <span style="color:var(--amber)">"llm_sql"</span>
+    HYBRID         = <span style="color:var(--amber)">"hybrid"</span>
+
+<span style="color:var(--blue)">class</span> <span style="color:var(--teal)">AmbiguityOption</span>(BaseModel):
+    label:      str
+    sql_filter: str
+    confidence: float  <span style="color:var(--text-3)"># 0.0–1.0</span>
+
+<span style="color:var(--blue)">class</span> <span style="color:var(--teal)">StructuredAmbiguity</span>(BaseModel):
+    field:   str
+    options: list[AmbiguityOption]
+    question: str
+
+<span style="color:var(--text-3)"># Add to AnalyticalIntent:</span>
+routing_strategy:        RoutingStrategy = ROUTING.LLM_SQL
+structured_ambiguities:  list[StructuredAmbiguity] = []
+governance_signal:       bool = False
+evidence_nodes_required: list[str] = []</pre>
+  </div>
+</div>
+
+<div class="diagram-card">
+  <div class="diagram-card-header">models/evidence.py — New file</div>
+  <div class="diagram-card-body">
+<pre style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--text-1);line-height:1.7;white-space:pre-wrap;"><span style="color:var(--blue)">class</span> <span style="color:var(--teal)">EvidenceNodeType</span>(str, Enum):
+    METRIC · SEGMENT · EVENT
+    ANOMALY · HYPOTHESIS · CONCLUSION
+
+<span style="color:var(--blue)">class</span> <span style="color:var(--teal)">EvidenceEdgeType</span>(str, Enum):
+    CAUSES · CORRELATES
+    EXPLAINS · CONTRADICTS
+
+<span style="color:var(--blue)">class</span> <span style="color:var(--teal)">EvidenceNode</span>(BaseModel):
+    id:        str
+    type:      EvidenceNodeType
+    label:     str
+    value:     float | str | None = None
+    confidence: float
+    sql_query: str | None = None
+
+<span style="color:var(--blue)">class</span> <span style="color:var(--teal)">EvidenceGraph</span>(BaseModel):
+    root_question:  str
+    nodes:          list[EvidenceNode]
+    edges:          list[EvidenceEdge]
+    top_conclusion: str
+    confidence:     float</pre>
+  </div>
+</div>
+
+</div>
+
+<!-- ═══ PHASE ROADMAP ══════════════════════════════════════ -->
+<div class="section-label">Implementation Roadmap</div>
+<div class="diagram-card section-gap">
+  <div class="diagram-card-header">3-Phase Roadmap</div>
+  <div class="diagram-card-body">
+<pre class="mermaid">
+gantt
+    title TachyonIQ Implementation Phases
+    dateFormat  YYYY-MM-DD
+    axisFormat  Wk %W
+
+    section Phase A — Stabilise & Secure  (Weeks 1–6)
+    Fix BUG-1 ConnectionManager              :a1, 2026-09-07, 1d
+    Fix BUG-2 Cloud adapter column_names     :a2, 2026-09-07, 1d
+    Fix BUG-4 BigQuery tempfile leak         :a3, 2026-09-08, 1d
+    BUG-3 RawColumnInfo references fields    :a4, 2026-09-08, 1d
+    BUG-5 can_see_sql RBAC enforcement       :a5, 2026-09-09, 1d
+    PG/MySQL server-side timeout             :a6, 2026-09-10, 2d
+    Redis rate limiter                       :a7, 2026-09-14, 3d
+    SCL hot-reload + atomic frozenset        :a8, 2026-09-17, 3d
+    AST ExplainabilityBuilder                :a9, 2026-09-21, 4d
+    Routing transparency chip                :a10,2026-09-21, 3d
+    DiagnosticRepairAgent (≤3 retries)       :a11,2026-09-28, 5d
+    Fix SavedAnalysisStore list()            :a12,2026-09-28, 2d
+    Pytest unit suite (≥80% coverage)        :a13,2026-10-01, 5d
+
+    section Phase B — Intelligence Upgrade  (Weeks 7–16)
+    RoutingStrategy enum + intent fields     :b1, 2026-10-12, 3d
+    StructuredAmbiguity + UI chips           :b2, 2026-10-15, 5d
+    Metric dependency DAG                    :b3, 2026-10-20, 5d
+    Row-level security enforcement           :b4, 2026-10-27, 5d
+    RCA Engine (STL decomposition)           :b5, 2026-11-03, 7d
+    EvidenceGraph model + builder            :b6, 2026-11-10, 7d
+    ADTK contextual anomaly                  :b7, 2026-11-17, 5d
+    deepeval CI + BIRD/Spider 2.0 baselines  :b8, 2026-11-17, 7d
+    Certified Q&A store                      :b9, 2026-11-24, 5d
+    Responsive chart improvements            :b10,2026-11-24, 4d
+    Fiscal calendar implementation           :b11,2026-11-28, 5d
+
+    section Phase C — Agentic Layer  (Weeks 17–26)
+    InvestigationPlanner                     :c1, 2026-12-14, 7d
+    Investigation Agent async loop           :c2, 2026-12-21, 10d
+    MCP Server                               :c3, 2026-12-28, 7d
+    Governance suggestion flywheel           :c4, 2027-01-04, 7d
+    Performance optimisation                 :c5, 2027-01-11, 7d
+    Production hardening + docs              :c6, 2027-01-18, 7d
+</pre>
+  </div>
+</div>
+
+</div><!-- /content -->
+
+<script>
+  // Render mermaid
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js';
+  script.onload = () => {
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#0D2A26',
+        primaryTextColor: '#E2EBF6',
+        primaryBorderColor: '#2DD4BF',
+        lineColor: '#4D7499',
+        secondaryColor: '#0A2033',
+        tertiaryColor: '#160F2B',
+        background: '#0B1220',
+        mainBkg: '#101928',
+        nodeBorder: '#1E3150',
+        clusterBkg: '#162135',
+        titleColor: '#E2EBF6',
+        edgeLabelBackground: '#101928',
+        actorBkg: '#0D1520',
+        actorBorder: '#1E3150',
+        actorTextColor: '#E2EBF6',
+        fontFamily: 'Sora, system-ui, sans-serif',
+        fontSize: '12px',
+        ganttFontSize: '11px',
+      },
+      flowchart: { curve: 'basis', padding: 20 },
+      securityLevel: 'loose',
+    });
+    // Re-render when theme changes
+    document.querySelector('.theme-btn').addEventListener('click', () => {
+      setTimeout(() => mermaid.init(undefined, '.mermaid'), 200);
+    });
+  };
+  document.head.appendChild(script);
+
+  // Theme toggle persistence
+  const saved = localStorage.getItem('tiq-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  document.querySelector('.theme-btn').addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('tiq-theme', next); } catch(e) {}
+  });
+</script>
+</body>
+</html>

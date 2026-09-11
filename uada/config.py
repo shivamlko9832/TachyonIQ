@@ -98,6 +98,13 @@ class Settings(BaseSettings):
         description="Maximum LLM retry attempts per pipeline stage. "
         "Does NOT apply to security violations — those always stop.",
     )
+    llm_router_model: str = Field(
+        default="",
+        description="Model for the Complexity Router (fast question classifier). "
+        "When empty, falls back to llm_model. "
+        "Set to a faster model such as 'claude-haiku-4-5' to reduce "
+        "classification latency without affecting SQL generation quality.",
+    )
 
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = Field(
@@ -228,6 +235,23 @@ class Settings(BaseSettings):
         le=500,
         description="Additional burst allowance above rate_limit_rpm. "
                     "Total capacity = rpm + burst.",
+    )
+
+    # ── Result quality (P4) ──────────────────────────────────────────────────
+    enable_result_critic: bool = Field(
+        default=True,
+        description="Enable the deterministic ResultCritic quality gate. "
+                    "When True, each query result is scored before insight "
+                    "generation; a score below the sufficiency threshold "
+                    "triggers the Replanner (if also enabled). "
+                    "Disable to skip quality gating entirely.",
+    )
+    enable_replanner: bool = Field(
+        default=True,
+        description="Enable the deterministic Replanner retry loop. "
+                    "Has no effect when enable_result_critic is False. "
+                    "When True, a failed ResultCritic evaluation triggers "
+                    "one plan-mutation + SQL-regeneration retry.",
     )
 
     # ── Audit logging ─────────────────────────────────────────────────────────

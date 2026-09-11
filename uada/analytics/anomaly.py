@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum rows for a reliable Isolation Forest fit
 _MIN_ROWS = 10
-# Default contamination: fraction of expected anomalies
+# Fallback contamination; IQR-based estimate is used when caller passes None
 _DEFAULT_CONTAMINATION = 0.05
 
 
@@ -37,11 +37,36 @@ class AnomalyDetector:
     Results are returned as a :class:`uada.models.result.AnomalyResult`.
     """
 
+    @staticmethod
+    def _estimate_contamination(subset: "pd.DataFrame") -> float:
+        """
+        Estimate contamination fraction via Tukey's IQR fences (B-02 fix).
+
+        A row is flagged when ANY column value falls outside
+        [Q1 - 1.5·IQR, Q3 + 1.5·IQR].  The fraction of flagged rows,
+        clipped to [0.01, 0.20], is returned as the IsolationForest
+        contamination parameter.
+        """
+        import numpy as np
+
+        q1 = subset.quantile(0.25)
+        q3 = subset.quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+
+        # Row is a candidate outlier if any column escapes its fence
+        outside = ((subset < lower) | (subset > upper)).any(axis=1)
+        fraction = float(outside.mean())
+
+        # IsolationForest requires contamination in (0, 0.5]; cap at 0.20
+        return float(np.clip(fraction, 0.01, 0.20))
+
     def detect(
         self,
         df: "pd.DataFrame",
         numeric_columns: list[str],
-        contamination: float = _DEFAULT_CONTAMINATION,
+        contamination: float | None = None,
         random_state: int = 42,
     ) -> "AnomalyResult":
         """
@@ -80,6 +105,14 @@ class AnomalyDetector:
             )
 
         try:
+            # B-02 fix: estimate contamination from data when not specified
+            if contamination is None:
+                contamination = AnomalyDetector._estimate_contamination(subset)
+                logger.debug(
+                    "AnomalyDetector: adaptive contamination=%.4f (IQR-based)",
+                    contamination,
+                )
+
             X = subset.values
             model = IsolationForest(
                 contamination=contamination,

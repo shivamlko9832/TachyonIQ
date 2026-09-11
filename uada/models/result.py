@@ -561,7 +561,29 @@ class UADAResponse(BaseModel):
 
     # ── Metadata (for UI chrome) ──────────────────────────────────────────────
     question_type: str | None = None  # From AnalyticalIntent.question_type
+    complexity_tier: str | None = Field(
+        default=None,
+        description="Complexity tier assigned by the ComplexityRouter "
+        "(simple/analytical/complex/very_complex). None when router skipped.",
+    )
+    # ── Investigation Agent (Step 3) ─────────────────────────────────────────
+    investigation_steps: int | None = Field(
+        default=None,
+        description="Number of ACT transitions taken by InvestigationAgent. "
+        "None when the linear pipeline handled the question.",
+    )
+    evidence_nodes: list[str] = Field(
+        default_factory=list,
+        description="Brief summaries of evidence collected during investigation "
+        "(task_id: summary format). Empty for linear-pipeline responses.",
+    )
     tables_used: list[str] = Field(default_factory=list)
+    critic_score: float | None = Field(
+        default=None,
+        description="Deterministic ResultCritic composite score (0.0–1.0). "
+        "None when the investigation agent handled the question or the "
+        "critic is not wired.",
+    )
     pipeline_duration_ms: float | None = None
 
     @property

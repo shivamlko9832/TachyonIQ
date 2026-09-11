@@ -38,6 +38,8 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     from uada.db.adapter import SQLAlchemyAdapter
     from uada.db.connection_manager import DatabaseConnectionManager
     from uada.pipeline.followup_engine import FollowUpEngine
+    from uada.pipeline.complexity_router import ComplexityRouter
+    from uada.pipeline.investigation_agent import InvestigationAgent
     from uada.observability.tracer import configure_tracing
     from uada.pipeline.conversation_store import ConversationStore
     from uada.pipeline.intent_extractor import IntentExtractor
@@ -84,9 +86,11 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     followup_engine = FollowUpEngine()
 
     from uada.observability.audit import AuditLogger
+    from uada.pipeline.result_critic import ResultCritic
+    from uada.pipeline.replanner import Replanner
     audit_logger = AuditLogger(settings.audit_log_path)
 
-    return PipelineOrchestrator(
+    _orchestrator = PipelineOrchestrator(
         db_adapter=db_adapter,
         scl_manager=scl_manager,
         schema_linker=SchemaLinker(retriever, scl_manager, settings),
@@ -100,7 +104,24 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         settings=settings,
         followup_engine=followup_engine,
         audit_logger=audit_logger,
+        complexity_router=ComplexityRouter(settings),
+        result_critic=ResultCritic() if settings.enable_result_critic else None,
+        replanner=Replanner() if (settings.enable_result_critic and settings.enable_replanner) else None,
     )
+
+    # Step 3: Attach InvestigationAgent — the sql_executor closure captures
+    # _orchestrator._execute_sql_for_investigation(), which enforces
+    # SQLValidator.validate() before every execution attempt (CRITICAL INVARIANT).
+    async def _inv_sql_executor(sql: str, description: str):  # type: ignore[return]
+        return await _orchestrator._execute_sql_for_investigation(sql, description)
+
+    _investigation_agent = InvestigationAgent(
+        settings=settings,
+        sql_executor=_inv_sql_executor,
+    )
+    _orchestrator.attach_investigation_agent(_investigation_agent)
+
+    return _orchestrator
 
 
 def create_app(
