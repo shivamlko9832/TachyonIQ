@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from uada.models.intent import AnalyticalIntent
     from uada.models.query_plan import QueryPlan
-    from uada.models.result import AnalysedResult, ForecastResult
+    from uada.models.result import (
+        AnalysedResult,
+        AnomalyResult,
+        CorrelationResult,
+        ForecastResult,
+    )
 
 
 class StatisticalEngine:
@@ -167,6 +172,88 @@ class StatisticalEngine:
         )
         updated.setdefault("assumptions", []).extend(forecast.assumptions)
         return self._clean(updated)
+
+    @staticmethod
+    def correlation_result(report: dict[str, Any]) -> CorrelationResult | None:
+        """Expose the governed correlation test through the compatibility field."""
+        from uada.models.result import CorrelationResult
+
+        tests = report.get("tests", {}).get("correlation", {})
+        if not tests:
+            return None
+
+        matrix: dict[str, dict[str, float]] = {}
+        pairs: list[dict[str, object]] = []
+        for pair_name, result in tests.items():
+            if not isinstance(result, dict) or ":" not in pair_name:
+                continue
+            first, second = pair_name.split(":", 1)
+            coefficient = result.get("coefficient")
+            if coefficient is None:
+                continue
+            value = float(coefficient)
+            matrix.setdefault(first, {})[second] = value
+            matrix.setdefault(second, {})[first] = value
+            matrix.setdefault(first, {})[first] = 1.0
+            matrix.setdefault(second, {})[second] = 1.0
+            pairs.append(
+                {
+                    "col_a": first,
+                    "col_b": second,
+                    "r": value,
+                    "strength": StatisticalEngine._correlation_strength(value),
+                    "direction": "positive" if value >= 0 else "negative",
+                    "p_value": result.get("p_value"),
+                    "q_value": result.get("q_value"),
+                    "observations": result.get("observations"),
+                }
+            )
+        if not pairs:
+            return None
+        pairs.sort(key=lambda item: abs(float(item["r"])), reverse=True)
+        return CorrelationResult(
+            method="pearson_with_benjamini_hochberg_fdr",
+            matrix=matrix,
+            top_pairs=pairs[:10],
+            min_rows_met=True,
+        )
+
+    @staticmethod
+    def anomaly_result(report: dict[str, Any]) -> AnomalyResult | None:
+        """Expose only anomaly rows flagged by the governed robust detector."""
+        from uada.models.result import AnomalyResult, AnomalyRow
+
+        analyses = report.get("anomalies", {})
+        if not analyses:
+            return None
+
+        rows: list[AnomalyRow] = []
+        methods: set[str] = set()
+        columns: list[str] = []
+        for column, result in analyses.items():
+            if not isinstance(result, dict):
+                continue
+            columns.append(str(column))
+            if result.get("method"):
+                methods.add(str(result["method"]))
+            for row in result.get("rows", []):
+                rows.append(
+                    AnomalyRow(
+                        row_index=int(row["row_index"]),
+                        anomaly_score=float(row.get("score", 0.0)),
+                        is_anomaly=True,
+                        column=str(column),
+                        period=str(row["period"]) if row.get("period") is not None else None,
+                        value=float(row["value"]) if row.get("value") is not None else None,
+                    )
+                )
+        return AnomalyResult(
+            method="+".join(sorted(methods)) or "governed_robust_detector",
+            anomaly_rows=rows,
+            anomaly_count=len(rows),
+            contamination=None,
+            feature_columns=columns,
+        )
 
     def narrative(
         self,
@@ -639,6 +726,19 @@ class StatisticalEngine:
         if abs(number) >= 100:
             return f"{number:,.1f}"
         return f"{number:,.2f}"
+
+    @staticmethod
+    def _correlation_strength(value: float) -> str:
+        magnitude = abs(value)
+        if magnitude >= 0.8:
+            return "very strong"
+        if magnitude >= 0.6:
+            return "strong"
+        if magnitude >= 0.4:
+            return "moderate"
+        if magnitude >= 0.2:
+            return "weak"
+        return "very weak"
 
     @staticmethod
     def _frequency_label(frequency: Any, periods: int) -> str:

@@ -211,6 +211,11 @@ def test_risk_narrative_and_fingerprint_come_from_executed_rows(
     correlations = report["tests"]["correlation"]
     assert correlations
     assert all("q_value" in item for item in correlations.values())
+    compatibility_correlation = engine.correlation_result(report)
+    assert compatibility_correlation is not None
+    assert compatibility_correlation.method == "pearson_with_benjamini_hochberg_fdr"
+    assert compatibility_correlation.top_pairs
+    assert "q_value" in compatibility_correlation.top_pairs[0]
 
     distribution_plan = plan.model_copy(
         update={"analysis_operations": [*plan.analysis_operations, "distribution"]}
@@ -230,6 +235,47 @@ def test_risk_narrative_and_fingerprint_come_from_executed_rows(
         report["provenance"]["result_sha256"]
         != changed_report["provenance"]["result_sha256"]
     )
+
+
+def test_compatibility_anomalies_are_only_governed_flagged_rows() -> None:
+    engine = StatisticalEngine()
+    result = engine.anomaly_result(
+        {
+            "anomalies": {
+                "recognized_revenue": {
+                    "method": "modified_z_score_mad",
+                    "count": 1,
+                    "rows": [
+                        {
+                            "row_index": 8,
+                            "period": "2025-05-01",
+                            "value": 10_800_000.0,
+                            "score": 4.2,
+                        }
+                    ],
+                },
+                "profit": {
+                    "method": "modified_z_score_mad",
+                    "count": 0,
+                    "rows": [],
+                },
+            }
+        }
+    )
+
+    assert result is not None
+    assert result.method == "modified_z_score_mad"
+    assert result.anomaly_count == 1
+    assert len(result.anomaly_rows) == 1
+    assert result.anomaly_rows[0].is_anomaly is True
+    assert result.anomaly_rows[0].column == "recognized_revenue"
+    assert result.anomaly_rows[0].period == "2025-05-01"
+
+
+def test_ui_fallback_reads_generated_vega_datasets() -> None:
+    source = (ROOT / "uada" / "api" / "routes" / "ui.py").read_text(encoding="utf-8")
+    assert "spec?.datasets?.[data.name]" in source
+    assert "robust anomal" in source
 
 
 def test_response_shortcut_builders_are_absent() -> None:

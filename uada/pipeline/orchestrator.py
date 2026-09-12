@@ -653,8 +653,12 @@ class PipelineOrchestrator:
                 tables_used=tables_used,
                 critic_score=_critic_result.score if _critic_result is not None else None,
                 pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
-                correlation_result=analysed.correlation_result,
-                anomaly_result=analysed.anomaly_result,
+                correlation_result=self._statistical_engine.correlation_result(
+                    statistical_analysis
+                ),
+                anomaly_result=self._statistical_engine.anomaly_result(
+                    statistical_analysis
+                ),
                 forecast_result=analysed.forecast_result,
                 data_quality=_data_quality,
                 explainability=_explainability,

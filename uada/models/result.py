@@ -302,7 +302,10 @@ class CorrelationResult(BaseModel):
     Produced by CorrelationAnalyser; stored on AnalysedResult.
     """
 
-    method: str = Field(default="pearson", description="'pearson' or 'spearman'.")
+    method: str = Field(
+        default="pearson",
+        description="Correlation estimator and any multiple-testing correction applied.",
+    )
     # Full n×n matrix: col_a → {col_b: r, ...}
     matrix: dict[str, dict[str, float]] = Field(
         default_factory=dict,
@@ -321,24 +324,36 @@ class CorrelationResult(BaseModel):
 
 
 class AnomalyRow(BaseModel):
-    """A single row flagged as anomalous by Isolation Forest (P3-2)."""
+    """A single row evaluated or flagged by an anomaly detector."""
 
     row_index: int
     anomaly_score: float = Field(
-        description="IsolationForest decision_function score (lower = more anomalous)."
+        description="Method-specific anomaly score; interpret it together with method."
     )
-    is_anomaly: bool = Field(description="True when predict() == -1.")
+    is_anomaly: bool = Field(description="True when the selected method flags the row.")
     # Per-column deviation from column mean, in std units (for explainability)
     column_deviations: dict[str, float] = Field(default_factory=dict)
+    column: str | None = Field(
+        default=None,
+        description="Measured column for a univariate governed anomaly flag.",
+    )
+    period: str | None = Field(
+        default=None,
+        description="Time bucket associated with a governed anomaly flag.",
+    )
+    value: float | None = Field(
+        default=None,
+        description="Observed value associated with a governed anomaly flag.",
+    )
 
 
 class AnomalyResult(BaseModel):
-    """Isolation Forest anomaly detection result (P3-2)."""
+    """Anomaly detection result selected by the governed analysis plan."""
 
     method: str = "isolation_forest"
     anomaly_rows: list[AnomalyRow] = Field(default_factory=list)
     anomaly_count: int = 0
-    contamination: float = 0.05
+    contamination: float | None = 0.05
     feature_columns: list[str] = Field(default_factory=list)
     skipped: bool = False
     skip_reason: str | None = None

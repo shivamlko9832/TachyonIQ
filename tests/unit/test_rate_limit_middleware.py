@@ -6,12 +6,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from uada.api.middleware.rate_limit import RateLimitMiddleware, _SlidingWindow
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -76,9 +74,10 @@ class TestSlidingWindow:
         assert removed == 0  # not yet expired
 
     def test_evict_stale_keys_removes_expired(self):
-        sw = _SlidingWindow(capacity=5, window=0.001)  # 1 ms window
+        now = [100.0]
+        sw = _SlidingWindow(capacity=5, window=1.0, clock=lambda: now[0])
         sw.check_and_record("old")
-        import time; time.sleep(0.01)  # wait for expiry
+        now[0] += 1.01
         removed = sw.evict_stale_keys()
         assert removed == 1
 

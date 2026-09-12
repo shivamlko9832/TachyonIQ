@@ -729,13 +729,68 @@ function renderKpi(viz) {
 let chartIdCounter = 0;
 function renderFallbackChart(viz) {
   const spec = viz?.spec || {};
-  const values = spec?.data?.values || [];
-  const enc = spec?.encoding || {};
+  const layers = Array.isArray(spec.layer) ? spec.layer : [];
+  const source = layers.find(layer => layer?.encoding?.x?.field && layer?.encoding?.y?.field) || spec;
+  const data = source?.data || spec?.data || {};
+  const values = data?.values || (data?.name && spec?.datasets?.[data.name]) || [];
+  const enc = source?.encoding || spec?.encoding || {};
   const xField = enc?.x?.field;
   const yField = enc?.y?.field;
   const colorField = enc?.color?.field;
-  if (!values.length || !xField || !yField) {
+  const histogram = Boolean(xField && enc?.x?.bin && enc?.y?.aggregate === 'count');
+  if (!values.length || !xField || (!yField && !histogram)) {
     return '<div class="chart-fallback">Chart data is available in the Data tab.</div>';
+  }
+  if (histogram) {
+    const numeric = values.map(row => Number(row[xField])).filter(Number.isFinite);
+    if (!numeric.length) return '<div class="chart-fallback">Chart data is unavailable.</div>';
+    const width = 720, height = 260, left = 58, right = 20, top = 20, bottom = 42;
+    const plotWidth = width - left - right, plotHeight = height - top - bottom;
+    const minimum = Math.min(...numeric), maximum = Math.max(...numeric);
+    const binCount = Math.max(4, Math.min(Number(enc.x.bin.maxbins || 12), Math.ceil(Math.sqrt(numeric.length))));
+    const binWidth = (maximum - minimum || 1) / binCount;
+    const counts = Array(binCount).fill(0);
+    numeric.forEach(value => counts[Math.min(binCount - 1, Math.floor((value - minimum) / binWidth))]++);
+    const maxCount = Math.max(...counts) || 1;
+    const barWidth = plotWidth / binCount;
+    let svg = `<svg class="fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(spec.title || viz.title || 'Distribution chart')}">`;
+    for (let i = 0; i <= 4; i++) {
+      const y = top + plotHeight * i / 4;
+      const count = Math.round(maxCount * (1 - i / 4));
+      svg += `<line x1="${left}" y1="${y}" x2="${width-right}" y2="${y}" stroke="#2a2d3a"/><text x="${left-8}" y="${y+4}" text-anchor="end" fill="#7b7f96" font-size="10">${count}</text>`;
+    }
+    counts.forEach((count, index) => {
+      const x = left + index * barWidth + 1;
+      const barHeight = count / maxCount * plotHeight;
+      svg += `<rect x="${x}" y="${top+plotHeight-barHeight}" width="${Math.max(1,barWidth-2)}" height="${barHeight}" fill="#8b5cf6" opacity=".86"/>`;
+    });
+    [0, Math.floor(binCount / 2), binCount].forEach(index => {
+      const value = minimum + index * binWidth;
+      const x = left + index / binCount * plotWidth;
+      svg += `<text x="${x}" y="${height-21}" text-anchor="middle" fill="#7b7f96" font-size="9">${Number(value).toLocaleString(undefined,{maximumFractionDigits:0})}</text>`;
+    });
+    return svg + '</svg>';
+  }
+  const horizontalBar = enc?.x?.type === 'quantitative' && enc?.y?.type !== 'quantitative';
+  if (horizontalBar) {
+    const width = 720, rowHeight = 30, left = 150, right = 28, top = 18;
+    const visibleValues = values.slice(0, 20);
+    const height = Math.max(150, top + visibleValues.length * rowHeight + 30);
+    const numeric = visibleValues.map(row => Number(row[xField])).filter(Number.isFinite);
+    if (!numeric.length) return '<div class="chart-fallback">Chart data is unavailable.</div>';
+    const maxValue = Math.max(0, ...numeric) || 1;
+    const plotWidth = width - left - right;
+    let svg = `<svg class="fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(spec.title || viz.title || 'Chart')}">`;
+    visibleValues.forEach((row, index) => {
+      const value = Number(row[xField]);
+      if (!Number.isFinite(value)) return;
+      const y = top + index * rowHeight;
+      const barWidth = Math.max(1, Math.abs(value) / maxValue * plotWidth);
+      svg += `<text x="${left-10}" y="${y+17}" text-anchor="end" fill="#a6a8bb" font-size="10">${escapeHtml(String(row[yField]).slice(0, 22))}</text>`;
+      svg += `<rect x="${left}" y="${y+4}" width="${barWidth}" height="18" rx="3" fill="#8b5cf6" opacity=".88"/>`;
+      svg += `<text x="${Math.min(width-right, left+barWidth+6)}" y="${y+17}" fill="#d7d8e3" font-size="10">${value.toLocaleString(undefined,{maximumFractionDigits:1})}</text>`;
+    });
+    return svg + '</svg>';
   }
   const width = 720, height = 260, left = 58, right = 20, top = 20, bottom = 42;
   const plotWidth = width - left - right, plotHeight = height - top - bottom;
@@ -758,7 +813,8 @@ function renderFallbackChart(viz) {
     const value = maxY - (range * i / 4);
     svg += `<line x1="${left}" y1="${y}" x2="${width-right}" y2="${y}" stroke="#2a2d3a"/><text x="${left-8}" y="${y+4}" text-anchor="end" fill="#7b7f96" font-size="10">${Number(value).toLocaleString(undefined,{maximumFractionDigits:0})}</text>`;
   }
-  const markType = typeof spec.mark === 'string' ? spec.mark : spec.mark?.type;
+  const activeMark = source?.mark || spec?.mark;
+  const markType = typeof activeMark === 'string' ? activeMark : activeMark?.type;
   Object.entries(groups).forEach(([group, rows], groupIndex) => {
     const points = rows.map(row => `${xAt(xs.indexOf(String(row[xField]))).toFixed(1)},${yAt(row[yField]).toFixed(1)}`).join(' ');
     const colour = palette[groupIndex % palette.length];
@@ -792,13 +848,29 @@ function renderChart(viz) {
   setTimeout(() => {
     const el = document.getElementById(id);
     if (!el || !viz.spec) return;
-    // Paint a deterministic inline chart first.  A remote Vega promise can
-    // remain pending when a CDN or schema URL is blocked, which previously
-    // left an empty chart frame.  The inline SVG is the guaranteed baseline;
-    // Vega can enhance it later without being required for a visible result.
-    el.innerHTML = renderFallbackChart(viz);
+    mountChart(el, viz);
   }, 50);
   return `<div class="chart-wrap"><div id="${id}"></div></div>`;
+}
+
+function mountChart(el, viz) {
+  // Paint a deterministic inline SVG immediately.  Vega then enhances the
+  // same evidence with tooltips and layered marks when its browser library is
+  // available; any loading or rendering failure restores the local chart.
+  const fallback = renderFallbackChart(viz);
+  el.innerHTML = fallback;
+  if (typeof window.vegaEmbed !== 'function' || !viz?.spec) return;
+  window.vegaEmbed(el, viz.spec, {
+    actions: false,
+    renderer: 'svg',
+    tooltip: true,
+    config: {
+      background: 'transparent',
+      view: {stroke: null},
+      axis: {labelColor: '#a6a8bb', titleColor: '#d7d8e3', gridColor: '#2a2d3a'},
+      legend: {labelColor: '#a6a8bb', titleColor: '#d7d8e3'}
+    }
+  }).catch(() => { el.innerHTML = fallback; });
 }
 
 function renderVisualisation(viz) {
@@ -945,14 +1017,6 @@ function renderInsightsDrawer(response) {
   if (anomalyCount) statisticBlocks.push(`<div class="metric-line"><span>Robust anomaly flags</span><span>${anomalyCount}</span></div>`);
   const provenance = stats.provenance || {};
   if (provenance.result_sha256) statisticBlocks.push(`<div class="drawer-copy" style="margin-top:8px">Proof fingerprint: ${escapeHtml(String(provenance.result_sha256).slice(0, 16))}…</div>`);
-  if (response.correlation_result && !response.correlation_result.skipped) {
-    const corr = response.correlation_result;
-    const top = corr.top_pairs && corr.top_pairs.length ? corr.top_pairs[0] : null;
-    statisticBlocks.push(`<div class="metric-line"><span>Correlation</span><span>${escapeHtml(corr.method || 'Pearson')} · ${top?.r == null ? 'see chart' : Number(top.r).toFixed(2)}</span></div>`);
-  }
-  if (response.anomaly_result && !response.anomaly_result.skipped) {
-    statisticBlocks.push(`<div class="metric-line"><span>Anomalies</span><span>${escapeHtml(response.anomaly_result.anomaly_count ?? 'Detected')}</span></div>`);
-  }
   let html = '';
   if (response.key_finding) html += `<div class="drawer-section"><div class="drawer-title">Headline</div><div class="drawer-copy">${escapeHtml(response.key_finding)}</div></div>`;
   if (findings.length) html += `<div class="drawer-section"><div class="drawer-title">${ins.evidence_verified ? 'Verified findings' : 'Key findings'}</div>${findings.slice(0,6).map(x=>`<div class="insights-item">${escapeHtml(x)}</div>`).join('')}</div>`;
@@ -1049,7 +1113,7 @@ function renderForecast(fc) {
   };
   setTimeout(() => {
     const el = document.getElementById(id);
-    if (el) el.innerHTML = renderFallbackChart({spec, title: label});
+    if (el) mountChart(el, {spec, title: label});
   }, 60);
   const label = fc.method ? `Forecast · ${fc.method}` : 'Forecast';
   return `<div class="chart-wrap" style="margin-top:8px">
@@ -1061,13 +1125,22 @@ function renderForecast(fc) {
 // ── Anomaly Highlights ──────────────────────────────────────────────────────
 function renderAnomalies(an) {
   if (!an || an.skipped || !an.anomaly_count) return '';
-  let h = `<div class="anomaly-badge">⚠ ${an.anomaly_count} anomal${an.anomaly_count===1?'y':'ies'} detected</div>`;
-  const rows = an.top_anomalies || an.anomaly_rows || [];
+  let h = `<div class="anomaly-badge">⚠ ${an.anomaly_count} robust anomal${an.anomaly_count===1?'y':'ies'} detected</div>`;
+  const rows = (an.top_anomalies || an.anomaly_rows || []).filter(row => row.is_anomaly !== false);
   if (rows.length)
     h += rows.slice(0,3).map(row => {
-      const txt = Object.entries(row).slice(0,4).map(([k,v])=>`${escapeHtml(k)}: <b>${escapeHtml(typeof v === 'object' ? JSON.stringify(v) : v)}</b>`).join(' · ');
+      const details = row.column
+        ? [
+            ['Measure', row.column],
+            row.period ? ['Period', row.period] : null,
+            row.value != null ? ['Value', Number(row.value).toLocaleString(undefined,{maximumFractionDigits:2})] : null,
+            row.anomaly_score != null ? ['Robust score', Number(row.anomaly_score).toFixed(2)] : null
+          ].filter(Boolean)
+        : Object.entries(row).filter(([key]) => key !== 'column_deviations').slice(0,4);
+      const txt = details.map(([k,v])=>`${escapeHtml(k)}: <b>${escapeHtml(typeof v === 'object' ? JSON.stringify(v) : v)}</b>`).join(' · ');
       return `<div class="anomaly-row">${txt}</div>`;
     }).join('');
+  h += `<div style="font-size:11px;color:var(--muted);margin-top:5px">Method selected by the governed plan: ${escapeHtml(String(an.method || 'governed robust detector').replaceAll('_', ' '))}</div>`;
   return h;
 }
 
@@ -1075,7 +1148,7 @@ function renderAnomalies(an) {
 function renderCorrelation(corr) {
   if (!corr || corr.skipped || !corr.top_pairs || !corr.top_pairs.length) return '';
   const pairs = corr.top_pairs.slice(0, 5);
-  let h = '<div class="corr-wrap"><div class="corr-lbl-row">Top Correlations</div>';
+  let h = '<div class="corr-wrap"><div class="corr-lbl-row">Verified correlations</div>';
   pairs.forEach(p => {
     const val = typeof p.correlation === 'number' ? p.correlation : (typeof p.r === 'number' ? p.r : 0);
     const pct = Math.abs(val * 100).toFixed(0);
@@ -1083,7 +1156,7 @@ function renderCorrelation(corr) {
     h += `<div class="corr-pair">
       <div class="corr-names">${escapeHtml(p.col_a)} ↔ ${escapeHtml(p.col_b)}</div>
       <div class="corr-bar-bg"><div class="corr-bar ${cls}" style="width:${pct}%"></div></div>
-      <div class="corr-val">${val>=0?'+':''}${val.toFixed(2)}</div>
+      <div class="corr-val">${val>=0?'+':''}${val.toFixed(2)}${p.q_value == null ? '' : ` · q=${Number(p.q_value).toFixed(3)}`}</div>
     </div>`;
   });
   return h + '</div>';

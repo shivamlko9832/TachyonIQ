@@ -20,6 +20,7 @@ only planned, so a demo cannot be mistaken for a production control.
 | Governed analytical intent | Analysis profiles contain metric, dimension, time, ranking and method contracts without answer values. The normalizer converts natural language into typed operations and exact forecast horizons before planning. | `config/demo_semantic_context.yaml`, `uada/models/intent.py`, `uada/pipeline/intent_normalizer.py` |
 | Statistical proof layer | Every successful governed response is analyzed from its executed rows by a deterministic engine. The report includes a SQL hash, result fingerprint, semantic aggregation, descriptive statistics, confidence intervals, trend tests, FDR-adjusted significance, robust anomaly detection, explanatory regression diagnostics, comparisons or backtested forecasts as requested. | `uada/analytics/statistical_engine.py`, `uada/analytics/forecast.py`, `tests/unit/test_governed_analytics.py` |
 | Grounded narration | The deterministic narrative is the primary answer. Optional model-written findings are retained only when every numeric claim can be matched to the statistical report; otherwise a verified deterministic fallback is returned. | `uada/pipeline/orchestrator.py`, `uada/pipeline/insight_generator.py`, `tests/unit/test_insight_generator.py` |
+| Evidence-aligned presentation | API compatibility fields for anomalies and correlations are projected from the governed statistical report, so the chat card and evidence drawer cannot disagree. Vega-Lite is enhanced in-browser when available, with deterministic local SVG support for named datasets, layered charts, distributions, time series, and ranking bars. | `uada/analytics/statistical_engine.py`, `uada/pipeline/orchestrator.py`, `uada/api/routes/ui.py`, `tests/unit/test_governed_analytics.py` |
 
 ## Partial or missing controls
 
@@ -52,7 +53,7 @@ These are deliberately visible gaps, not claims of completion:
   `/health`; the current liveness contract intentionally keeps that endpoint
   public.
 
-## Statistical and grounding acceptance — 12 September 2026
+## Statistical and grounding acceptance — 13 September 2026
 
 The prior forecast and executive-summary response shortcuts have been removed.
 Semantic profiles contain reusable analysis instructions only; they do not contain
@@ -74,6 +75,11 @@ Method selection is driven by typed operations:
 
 Live acceptance against `data/demo.sqlite` produced the following reproducible results:
 
+- The executive-summary request now runs through the governed scorecard profile
+  and returns 37 monthly rows. An independent replay compared all 407 returned
+  cells with a fresh execution of the displayed SQL and found an exact match.
+  The reported result fingerprint also matched a separately recomputed SHA-256;
+  changing one value produced a different fingerprint.
 - The one-month revenue forecast returned exactly one point. ARIMA was selected by
   chronological holdout, with first forecast 9,698,813.69, 95% interval
   7,407,851.10–11,989,776.28 and holdout RMSE 655,395.85. Independent execution of
@@ -87,12 +93,27 @@ Live acceptance against `data/demo.sqlite` produced the following reproducible r
   identified Clear Labs 0848 from the executed rows. Its correlations contain
   FDR-adjusted q-values and its explanatory regression uses all 2,500 observations;
   the result was not truncated.
+- A fresh browser acceptance run rendered the executive monthly trend, revenue
+  distribution and anomaly view. The chat card and statistics drawer both reported
+  one robust anomaly; only the flagged row was displayed with its measure, period,
+  observed value, score and selected MAD/IQR method. No legacy Isolation Forest
+  output or unrequested correlation panel was mixed into that response.
 
 Each result carries a SHA-256 fingerprint over the exact columns and rows, plus a
 hash of the executed SQL. Changing a returned value changes the fingerprint. The
 demo ground-truth runner independently checks table counts, scalar proofs, effect
 sizes, correlations, the Europe decline and the APAC anomaly. The current unit suite
-passes 492 tests; the deterministic demo acceptance report also passes.
+passes 496 tests, the integration suite passes 64 tests, and the deterministic demo
+acceptance report passes.
+
+The executive-summary failure shown during acceptance was traced to the planner's
+table-reference lexer. It interpreted the decimal literal `100.0` in a governed
+percentage formula as the qualified identifier `100.0`, then tried to find a join
+to a table named `100`. The identifier matcher now requires SQL identifiers to begin
+with a letter or underscore, and the governed-profile regression test plans the full
+scorecard formula set to prevent recurrence. Profile normalization also clears
+model-proposed comparison, ordering, limit and prior-turn fields that are absent from
+the matched governed contract.
 
 These checks establish that the demonstrated answers are computed rather than
 prewritten. They do not make every statistical method appropriate for every future

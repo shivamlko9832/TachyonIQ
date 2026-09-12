@@ -49,6 +49,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from starlette.middleware.base import RequestResponseEndpoint
     from starlette.requests import Request
     from starlette.responses import Response
@@ -72,9 +74,15 @@ class _SlidingWindow:
     rolling ``window`` period.
     """
 
-    def __init__(self, capacity: int, window: float = _WINDOW_SECONDS) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        window: float = _WINDOW_SECONDS,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
         self._capacity = capacity
         self._window = window
+        self._clock = clock
         self._buckets: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -87,7 +95,7 @@ class _SlidingWindow:
             ``retry_after_seconds`` is the number of seconds until the
             oldest entry expires (i.e. when capacity is next available).
         """
-        now = monotonic()
+        now = self._clock()
         cutoff = now - self._window
         with self._lock:
             bucket = self._buckets.setdefault(key, deque())
@@ -106,7 +114,7 @@ class _SlidingWindow:
 
     def evict_stale_keys(self) -> int:
         """Remove keys whose buckets are entirely expired. Returns evicted count."""
-        now = monotonic()
+        now = self._clock()
         cutoff = now - self._window
         removed = 0
         with self._lock:
