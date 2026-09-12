@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Light, navy-accented palette (Tachyon AURA reference) */
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f1f2f5;
+  --border: #e5e7eb;
+  --accent: #111827;
+  --accent-fg: #ffffff;
+  --accent-soft: #eef0f3;
+  --accent2: #0d9488;
+  --text: #111827;
+  --muted: #6b7280;
+  --danger: #dc2626;
+  --warn: #d97706;
+  --up: #16a34a;
+  --down: #dc2626;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.sql-kw {
+  color: #7c3aed;
+  font-weight: 600;
+}
+.sql-fn {
+  color: #2563eb;
+}
+.sql-str {
+  color: #15803d;
+}
+.sql-num {
+  color: #c2410c;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
