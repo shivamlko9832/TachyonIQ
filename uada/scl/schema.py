@@ -49,6 +49,14 @@ class JoinCardinality(str, Enum):
     MANY_TO_MANY = "many_to_many"
 
 
+class MetricAdditivity(str, Enum):
+    """Whether grouped metric values may be safely rolled up by summing them."""
+
+    ADDITIVE = "additive"
+    SEMI_ADDITIVE = "semi_additive"
+    NON_ADDITIVE = "non_additive"
+
+
 class SQLDialect(str, Enum):
     POSTGRESQL = "postgresql"
     MYSQL = "mysql"
@@ -175,6 +183,11 @@ class MetricDefinition(BaseModel):
     grain: str | None = Field(
         default=None,
         description="The grain at which this metric is defined. E.g. 'order'.",
+    )
+    additivity: MetricAdditivity = Field(
+        default=MetricAdditivity.ADDITIVE,
+        description="Whether values may be summed across result groups. Distinct counts, "
+        "ratios, averages and percentages are normally non-additive.",
     )
     unit: str | None = Field(default=None, description="Unit of the metric. E.g. 'USD', '%'.")
     aliases: list[str] = Field(default_factory=list)
@@ -312,6 +325,66 @@ class DatabaseMeta(BaseModel):
     )
 
 
+class AnalysisProfileDefinition(BaseModel):
+    """A governed, reusable analytical dataset profile.
+
+    Profiles contain semantic names only.  They do not contain answers or
+    display values: the normal planner resolves their measures and dimensions,
+    and every number is still produced by validated SQL and deterministic
+    analysis at request time.
+    """
+
+    name: str
+    description: str
+    aliases: list[str] = Field(default_factory=list)
+    measures: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    time_dimension: str | None = None
+    time_bucket: str | None = None
+    operations: list[str] = Field(default_factory=list)
+    question_type: str | None = None
+    order_by: str | None = None
+    order_direction: str = "desc"
+    limit: int | None = Field(default=None, ge=1, le=10_000)
+    excluded_glossary_filters: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_analysis_contract(self) -> "AnalysisProfileDefinition":
+        allowed_operations = {
+            "descriptive",
+            "comparison",
+            "trend",
+            "distribution",
+            "correlation",
+            "regression",
+            "anomaly",
+            "forecast",
+            "contribution",
+            "driver_analysis",
+            "executive_summary",
+        }
+        unknown_operations = set(self.operations) - allowed_operations
+        if unknown_operations:
+            raise ValueError(f"Unknown analytical operations: {sorted(unknown_operations)}")
+        allowed_question_types = {
+            "aggregation",
+            "time_series",
+            "comparison",
+            "ranking",
+            "filter",
+            "diagnostic",
+        }
+        if self.question_type and self.question_type not in allowed_question_types:
+            raise ValueError(f"Unknown profile question_type '{self.question_type}'.")
+        if self.order_direction not in {"asc", "desc"}:
+            raise ValueError("order_direction must be 'asc' or 'desc'.")
+        if self.order_by and self.order_by not in {*self.measures, *self.dimensions}:
+            raise ValueError("order_by must reference a profile measure or dimension.")
+        if self.question_type == "ranking" and not self.order_by:
+            raise ValueError("A ranking profile requires order_by.")
+        return self
+
+
 class SemanticContextLayer(BaseModel):
     """
     Root model for the UADA Semantic Context Layer.
@@ -327,6 +400,7 @@ class SemanticContextLayer(BaseModel):
     joins: list[JoinDefinition] = Field(default_factory=list)
     glossary: list[GlossaryTerm] = Field(default_factory=list)
     examples: list[ExampleQuery] = Field(default_factory=list)
+    analysis_profiles: list[AnalysisProfileDefinition] = Field(default_factory=list)
     security: SecurityPolicy = Field(default_factory=SecurityPolicy)
 
     @model_validator(mode="after")
@@ -343,6 +417,28 @@ class SemanticContextLayer(BaseModel):
                 raise ValueError(
                     f"Join references unknown table '{join.to_table}'. "
                     f"Available tables: {sorted(table_names)}"
+                )
+        metric_names = {metric.name for metric in self.metrics}
+        column_names = {
+            column.name for table in self.included_tables for column in table.included_columns
+        }
+        for profile in self.analysis_profiles:
+            unknown_measures = set(profile.measures) - metric_names
+            if unknown_measures:
+                raise ValueError(
+                    f"Analysis profile '{profile.name}' references unknown measures: "
+                    f"{sorted(unknown_measures)}"
+                )
+            unknown_dimensions = set(profile.dimensions) - column_names
+            if unknown_dimensions:
+                raise ValueError(
+                    f"Analysis profile '{profile.name}' references unknown dimensions: "
+                    f"{sorted(unknown_dimensions)}"
+                )
+            if profile.time_dimension and profile.time_dimension not in column_names:
+                raise ValueError(
+                    f"Analysis profile '{profile.name}' references unknown time dimension "
+                    f"'{profile.time_dimension}'."
                 )
         return self
 

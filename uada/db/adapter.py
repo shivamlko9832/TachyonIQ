@@ -156,22 +156,26 @@ class SQLAlchemyAdapter(DatabaseAdapter):
         """
         Best-effort check that the credentials are read-only.
 
-        Attempts a write against a table that should not exist. Any
-        failure (including "table does not exist") is the expected, safe
-        outcome and is swallowed. If the write unexpectedly succeeds, the
-        account has broader privileges than assumed -- log a warning.
+        Use a temporary table inside a rolled-back transaction. Probing a
+        deliberately missing table is not meaningful: a writable account
+        fails that probe for the same reason as a read-only account.
         """
-        probe_table = "__uada_readonly_probe__"
+        statement = (
+            "CREATE TABLE #__uada_readonly_probe__ (x INTEGER)"
+            if self._dialect == "tsql"
+            else "CREATE TEMPORARY TABLE __uada_readonly_probe__ (x INTEGER)"
+        )
         try:
             with self._engine.connect() as conn:
+                transaction = conn.begin()
                 try:
-                    conn.execute(text(f"INSERT INTO {probe_table} (x) VALUES (1)"))
+                    conn.execute(text(statement))
                 except SQLAlchemyError:
-                    conn.rollback()
+                    transaction.rollback()
                     return
-                conn.rollback()
+                transaction.rollback()
                 logger.warning(
-                    "Write succeeded against a nonexistent table -- "
+                    "Temporary table creation succeeded -- "
                     "the database account may not be read-only."
                 )
         except SQLAlchemyError:

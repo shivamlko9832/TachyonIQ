@@ -1,5 +1,7 @@
 # TachyonIQ vs Databricks Genie — Competitive Gap Analysis
 
+> Historical analysis: superseded by [the 12 September 2026 target design](TACHYONIQ_TARGET_DESIGN.md). Claims below about competitor internals, model providers, architectural superiority and production readiness are not verified and must not be used as current product claims.
+
 > Audit date: 2026-09-05  
 > Reference: Databricks Genie (Lakehouse IQ / AI/BI Genie)  
 > Goal: Identify where TachyonIQ should match, exceed, or strategically differ from Genie

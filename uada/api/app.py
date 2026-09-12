@@ -40,6 +40,7 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     from uada.pipeline.followup_engine import FollowUpEngine
     from uada.pipeline.complexity_router import ComplexityRouter
     from uada.pipeline.investigation_agent import InvestigationAgent
+    from uada.pipeline.insight_generator import InsightGenerator
     from uada.observability.tracer import configure_tracing
     from uada.pipeline.conversation_store import ConversationStore
     from uada.pipeline.intent_extractor import IntentExtractor
@@ -62,7 +63,19 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     # TestModel-overridden agents a test wires up.
     configure_tracing(settings)
 
-    scl = SCLLoader.load(settings.scl_path)
+    # The checked-in demo database has its own governed semantic layer. When a
+    # local developer points at that database without setting UADA_SCL_PATH,
+    # automatically pair it with the demo SCL instead of silently loading the
+    # small generic production template and failing strict metric resolution.
+    scl_path = settings.scl_path
+    db_url = settings.db_url.get_secret_value().lower()
+    if "scl_path" not in settings.model_fields_set and db_url.endswith("demo.sqlite"):
+        demo_scl_path = settings.scl_path.parent / "demo_semantic_context.yaml"
+        if demo_scl_path.exists():
+            scl_path = demo_scl_path
+            logger.info("Using demo semantic context for demo database: %s", scl_path)
+
+    scl = SCLLoader.load(scl_path)
     scl_manager = SCLManager(scl)
 
     db_adapter = SQLAlchemyAdapter(settings.db_url.get_secret_value(), settings)
@@ -81,6 +94,10 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         max_subquery_depth=settings.sql_max_subquery_depth,
         inject_limit=settings.sql_inject_limit,
         default_limit=settings.db_max_rows,
+        excluded_columns={
+            exclusion.table: set(exclusion.columns) for exclusion in scl.security.excluded_columns
+        },
+        row_filters=scl.security.row_filters,
     )
 
     followup_engine = FollowUpEngine()
@@ -88,6 +105,7 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
     from uada.observability.audit import AuditLogger
     from uada.pipeline.result_critic import ResultCritic
     from uada.pipeline.replanner import Replanner
+
     audit_logger = AuditLogger(settings.audit_log_path)
 
     _orchestrator = PipelineOrchestrator(
@@ -95,7 +113,10 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         scl_manager=scl_manager,
         schema_linker=SchemaLinker(retriever, scl_manager, settings),
         intent_extractor=IntentExtractor(settings),
-        query_planner=QueryPlanner(scl_manager),
+        query_planner=QueryPlanner(
+            scl_manager,
+            strict_semantics=settings.strict_semantic_resolution,
+        ),
         sql_generator=SQLGenerator(settings),
         result_analyser=ResultAnalyser(),
         viz_generator=VisualisationGenerator(settings),
@@ -106,7 +127,10 @@ def _bootstrap_orchestrator(settings: Settings) -> PipelineOrchestrator:
         audit_logger=audit_logger,
         complexity_router=ComplexityRouter(settings),
         result_critic=ResultCritic() if settings.enable_result_critic else None,
-        replanner=Replanner() if (settings.enable_result_critic and settings.enable_replanner) else None,
+        replanner=Replanner()
+        if (settings.enable_result_critic and settings.enable_replanner)
+        else None,
+        insight_generator=InsightGenerator(settings),
     )
 
     # Step 3: Attach InvestigationAgent — the sql_executor closure captures
@@ -155,7 +179,12 @@ def create_app(
             app.state.orchestrator = _bootstrap_orchestrator(settings)
             logger.info("Pipeline orchestrator ready.")
         from uada.db.connection_manager import DatabaseConnectionManager
-        app.state.connection_manager = DatabaseConnectionManager()
+
+        # Preserve an explicitly injected registry (used by deployments that
+        # manage connections outside the lifespan and by integration tests).
+        # The default registry is created only when the app has none yet.
+        if not hasattr(app.state, "connection_manager"):
+            app.state.connection_manager = DatabaseConnectionManager()
         yield
 
     app = FastAPI(title="UADA", version="0.1.0", lifespan=lifespan)

@@ -30,7 +30,7 @@ class TestAllowedTables:
     def test_excluded_tables_are_removed(self, manager: SCLManager) -> None:
         allowed = manager.get_allowed_tables()
         assert isinstance(allowed, frozenset)
-        assert allowed == {"orders", "customers"}
+        assert allowed == {"orders", "customers", "products"}
         assert "audit_log" not in allowed
         assert "user_sessions" not in allowed
         assert "api_keys" not in allowed
@@ -100,9 +100,9 @@ class TestGetJoinPath:
 class TestToIndexableDocuments:
     def test_document_count_matches_scl_content(self, manager: SCLManager) -> None:
         docs = manager.to_indexable_documents()
-        # config/semantic_context.yaml: 2 included tables, 4 metrics,
+        # config/semantic_context.yaml: 3 included tables, 4 metrics,
         # 3 glossary terms, 4 examples.
-        assert len(docs) == 2 + 4 + 3 + 4
+        assert len(docs) == 3 + 4 + 3 + 4
 
     def test_table_document_format(self, manager: SCLManager) -> None:
         docs = manager.to_indexable_documents()

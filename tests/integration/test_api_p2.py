@@ -345,11 +345,11 @@ class TestSchemaRefresh:
     """
 
     @pytest.fixture
-    def refresh_app(self, orchestrator: PipelineOrchestrator):
+    def refresh_app(self, orchestrator: PipelineOrchestrator, tmp_path):
         """App + pre-registered SQLite connection + the manager instance."""
         from uada.db.connection_manager import ConnectionConfig, DatabaseConnectionManager
 
-        mgr = DatabaseConnectionManager()
+        mgr = DatabaseConnectionManager(tmp_path / "connections")
 
         tf = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tf.close()
@@ -398,6 +398,7 @@ class TestSchemaRefresh:
         assert isinstance(body["table_count"], int)
         assert body["table_count"] >= 1
         assert isinstance(body["column_count"], int)
+        assert isinstance(body["relationship_count"], int)
         assert isinstance(body["tables"], list)
 
     def test_refresh_tables_have_column_summaries(self, refresh_app: Any) -> None:
@@ -455,12 +456,12 @@ class TestSchemaRefresh:
         )
 
     def test_refresh_returns_404_for_unknown_connection(
-        self, orchestrator: PipelineOrchestrator
+        self, orchestrator: PipelineOrchestrator, tmp_path
     ) -> None:
         """Requesting refresh for a non-existent connection must return 404."""
         from uada.db.connection_manager import DatabaseConnectionManager
 
-        mgr = DatabaseConnectionManager()
+        mgr = DatabaseConnectionManager(tmp_path / "connections")
         app = create_app(orchestrator=orchestrator)
 
         with TestClient(app) as client:
@@ -470,12 +471,12 @@ class TestSchemaRefresh:
         assert response.status_code == 404
 
     def test_refresh_schema_fingerprint_changes_after_schema_change(
-        self, orchestrator: PipelineOrchestrator
+        self, orchestrator: PipelineOrchestrator, tmp_path
     ) -> None:
         """Two different schemas must produce different fingerprints."""
         from uada.db.connection_manager import ConnectionConfig, DatabaseConnectionManager
 
-        mgr = DatabaseConnectionManager()
+        mgr = DatabaseConnectionManager(tmp_path / "connections")
         tfiles: list[str] = []
         connection_ids: list[str] = []
 

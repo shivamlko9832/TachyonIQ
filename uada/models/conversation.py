@@ -97,6 +97,10 @@ class ConversationState(BaseModel):
     """
 
     session_id: str
+    owner_id: str | None = Field(
+        default=None,
+        description="Authenticated subject that owns this session. None is a legacy/internal session.",
+    )
     database_id: str = Field(
         description="Identifier of the connected database. "
         "Used to validate that follow-up questions reference the correct schema.",
@@ -165,6 +169,8 @@ class ConversationState(BaseModel):
             lines.append(f"Current measures: {', '.join(ctx.current_measures)}")
         if ctx.current_dimensions:
             lines.append(f"Current dimensions: {', '.join(ctx.current_dimensions)}")
+        if ctx.current_time_range:
+            lines.append(f"Current time range: {ctx.current_time_range}")
 
         return "\n".join(lines) if lines else "No prior context."
 

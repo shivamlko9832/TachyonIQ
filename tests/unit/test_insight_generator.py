@@ -1,12 +1,7 @@
-"""
-Unit tests for uada.pipeline.insight_generator (P4-A-3).
-
-Uses PydanticAI TestModel to avoid any real LLM call.
-"""
+"""Unit tests for the grounded insight generator."""
 
 from __future__ import annotations
 
-import pytest
 import asyncio
 from unittest.mock import MagicMock
 
@@ -14,7 +9,6 @@ from pydantic_ai.models.test import TestModel
 
 from uada.models.result import GeneratedInsights
 from uada.pipeline.insight_generator import InsightGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,8 +130,6 @@ class TestInsightGenerator:
         """If the LLM agent throws, generate() returns a safe fallback."""
         gen = InsightGenerator(_mock_settings())
         # Override with a model that always errors
-        from pydantic_ai.models.test import TestModel as TM
-
         class _FailModel:
             async def request(self, *a, **kw):
                 raise RuntimeError("simulated LLM failure")
@@ -167,10 +159,57 @@ class TestInsightGenerator:
         )
         dq = _mock_dq(score=50.0, issues=[issue])
         gen = InsightGenerator(_mock_settings())
-        args = {**_insight_args(), "data_quality_notes": ["revenue has 50% nulls — interpret with caution."]}
+        args = {
+            **_insight_args(),
+            "data_quality_notes": [
+                "revenue has 50% nulls — interpret with caution."
+            ],
+        }
         with gen.agent.override(model=TestModel(custom_output_args=args)):
             import asyncio
             result = asyncio.run(
                 gen.generate("What was revenue?", _mock_analysed(), data_quality=dq)
             )
         assert isinstance(result, GeneratedInsights)
+
+    def test_statistical_report_marks_grounded_findings_verified(self):
+        gen = InsightGenerator(_mock_settings())
+        report = {
+            "sample_size": 20,
+            "descriptive": {"revenue": {"sum": 5000.0}},
+            "tests": {"trend": {"revenue": {"change_pct": 12.5}}},
+            "provenance": {"result_sha256": "abc123", "deterministic": True},
+        }
+        with gen.agent.override(model=TestModel(custom_output_args=_insight_args())):
+            result = asyncio.run(
+                gen.generate(
+                    "What was revenue?",
+                    _mock_analysed(),
+                    statistical_analysis=report,
+                )
+            )
+        assert result.evidence_verified is True
+        assert result.key_findings == ["Revenue totalled £5,000 with a 12.5% increase."]
+
+    def test_statistical_report_removes_fabricated_numeric_finding(self):
+        gen = InsightGenerator(_mock_settings())
+        output = {
+            **_insight_args(),
+            "key_findings": ["Revenue was £999,999."],
+        }
+        report = {
+            "sample_size": 20,
+            "descriptive": {"revenue": {"sum": 5000.0}},
+            "provenance": {"result_sha256": "abc123", "deterministic": True},
+        }
+        with gen.agent.override(model=TestModel(custom_output_args=output)):
+            result = asyncio.run(
+                gen.generate(
+                    "What was revenue?",
+                    _mock_analysed(),
+                    statistical_analysis=report,
+                )
+            )
+        assert result.evidence_verified is True
+        assert all("999,999" not in finding for finding in result.key_findings)
+        assert any("Removed 1" in note for note in result.verification_notes)

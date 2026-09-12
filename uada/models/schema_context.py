@@ -124,6 +124,12 @@ class SchemaContext(BaseModel):
         default=None,
         description="The default time column for this schema, from SCL configuration.",
     )
+    fiscal_year_start_month: int = Field(
+        default=1,
+        ge=1,
+        le=12,
+        description="Fiscal year start month copied from the SCL database metadata.",
+    )
 
     # ── Retrieval metadata ────────────────────────────────────────────────────
     retrieval_query: str = Field(description="The query used for retrieval, for tracing.")

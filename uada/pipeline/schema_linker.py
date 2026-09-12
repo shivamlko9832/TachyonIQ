@@ -132,6 +132,7 @@ class SchemaLinker:
             examples=examples,
             dialect=self._scl_manager.scl.database.dialect.value,
             default_time_column=self._default_time_column(tables),
+            fiscal_year_start_month=self._scl_manager.scl.database.fiscal_year_start_month,
             retrieval_query=query,
             total_retrieved=total_retrieved,
         )

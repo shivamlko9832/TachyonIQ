@@ -58,7 +58,10 @@ class QueryExecutionResult:
     rows: list[list[object]]
     row_count: int
     is_truncated: bool
-    execution_time_ms: float
+    # Keep a default so lightweight adapters, fixtures, and callers that only
+    # need result shape do not have to fabricate timing data. Concrete
+    # adapters always populate the measured value.
+    execution_time_ms: float = 0.0
 
 
 class DatabaseAdapter(ABC):
@@ -184,7 +187,9 @@ class QueryExecutionError(DatabaseError):
             return "Column reference is ambiguous. Use fully qualified table.column names."
         if "aggregate" in msg_lower and "group by" in msg_lower:
             return "Aggregation error. Check GROUP BY includes all non-aggregated columns."
-        return f"Database error: {message[:200]}"
+        # Do not pass raw driver text (which can contain literals, schema
+        # names, or provider metadata) into a repair prompt or API response.
+        return "Database rejected the query; verify the referenced fields and dialect syntax."
 
 
 class SecurityViolation(Exception):

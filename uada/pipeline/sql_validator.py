@@ -59,7 +59,10 @@ DANGEROUS_FUNCTIONS: frozenset[str] = frozenset(
         "into_dumpfile",
         # PostgreSQL
         "pg_read_file",
+        "pg_read_binary_file",
         "pg_ls_dir",
+        "pg_ls_waldir",
+        "pg_stat_file",
         "pg_sleep",
         "copy",
         "lo_import",
@@ -76,6 +79,22 @@ DANGEROUS_FUNCTIONS: frozenset[str] = frozenset(
         "system_user",
         "version",
         "@@version",
+        # DuckDB / file and network access
+        "read_csv",
+        "read_csv_auto",
+        "read_parquet",
+        "parquet_scan",
+        "read_json",
+        "read_json_auto",
+        "read_text",
+        "glob",
+        "http_get",
+        "httpfs",
+        "sqlite_scan",
+        "load_extension",
+        "install",
+        "attach",
+        "pragma",
     }
 )
 
@@ -131,6 +150,11 @@ class ViolationType(str, Enum):
     PARSE_FAILURE = "parse_failure"
     COMMENT_INJECTION = "comment_injection"
     EMPTY_QUERY = "empty_query"
+    WRITE_OPERATION = "write_operation"
+    ROW_LOCK = "row_lock"
+    LIMIT_EXCEEDED = "limit_exceeded"
+    COLUMN_NOT_ALLOWED = "column_not_allowed"
+    ROW_FILTER_INVALID = "row_filter_invalid"
 
 
 @dataclass
@@ -172,6 +196,8 @@ class SQLValidator:
         max_subquery_depth: int = 3,
         inject_limit: bool = True,
         default_limit: int = 1000,
+        excluded_columns: dict[str, set[str]] | None = None,
+        row_filters: dict[str, str] | None = None,
     ) -> None:
         """
         Args:
@@ -180,13 +206,29 @@ class SQLValidator:
             max_subquery_depth: Maximum nesting depth of subqueries.
             inject_limit: If True, adds LIMIT {default_limit} when no LIMIT is present.
             default_limit: The LIMIT value to inject.
+            excluded_columns: Per-table column names that must never be
+                              selected or referenced.
+            row_filters: Per-table predicates appended to every query touching
+                         that table.
         """
+        # An empty allowlist is fail-closed.  Treating it as "all tables" is
+        # unsafe in production because a missing or malformed semantic model
+        # would silently become unrestricted database access.
         self._allowed_tables: frozenset[str] = frozenset(
-            t.lower() for t in allowed_tables
+            t.strip().lower() for t in allowed_tables if t and t.strip()
         )
         self._max_subquery_depth = max_subquery_depth
         self._inject_limit = inject_limit
         self._default_limit = default_limit
+        self._excluded_columns = {
+            table.lower(): {column.lower() for column in columns}
+            for table, columns in (excluded_columns or {}).items()
+        }
+        self._row_filters = {
+            table.lower(): predicate.strip()
+            for table, predicate in (row_filters or {}).items()
+            if predicate and predicate.strip()
+        }
 
     def validate(self, sql: str, dialect: str = "postgres") -> ValidationResult:
         """
@@ -307,6 +349,38 @@ class SQLValidator:
                 parse_time_ms=(time.perf_counter() - start) * 1000,
             )
 
+        # A SELECT wrapper can still contain a write (for example a DELETE in
+        # a CTE), SELECT INTO, or a row-locking clause.  Walk the complete AST
+        # instead of checking only the root node.
+        nested_writes = [
+            node for node in statement.walk()
+            if isinstance(node, FORBIDDEN_STATEMENT_TYPES)
+        ]
+        if nested_writes:
+            violations.append(
+                ValidationViolation(
+                    violation_type=ViolationType.WRITE_OPERATION,
+                    detail="Query contains a write operation inside a SELECT tree.",
+                    user_message="This query cannot be executed.",
+                )
+            )
+        if any(isinstance(node, exp.Into) for node in statement.walk()):
+            violations.append(
+                ValidationViolation(
+                    violation_type=ViolationType.WRITE_OPERATION,
+                    detail="SELECT INTO is not permitted.",
+                    user_message="This query cannot be executed.",
+                )
+            )
+        if any(isinstance(node, exp.Lock) for node in statement.walk()):
+            violations.append(
+                ValidationViolation(
+                    violation_type=ViolationType.ROW_LOCK,
+                    detail="Row-locking clauses are not permitted for read-only analytics.",
+                    user_message="This query cannot be executed.",
+                )
+            )
+
         # ── Rule 2: Extract all referenced tables ──────────────────────────
         referenced_tables = self._extract_tables(statement)
 
@@ -324,20 +398,75 @@ class SQLValidator:
                     )
 
         # ── Rule 4: Table allowlist ────────────────────────────────────────
-        if self._allowed_tables:  # Empty set means "allow all" (e.g. during testing)
-            for table_name in referenced_tables:
-                # Strip schema prefix for comparison: "public.orders" → "orders"
-                bare_name = table_name.split(".")[-1].lower()
-                if bare_name not in self._allowed_tables:
+        for table_name in referenced_tables:
+            # Qualified names are matched exactly.  In particular,
+            # tenant_b.orders must not match an allowlisted bare `orders`.
+            table_lower = table_name.lower()
+            bare_name = table_lower.rsplit(".", 1)[-1]
+            allowed = table_lower in self._allowed_tables or (
+                "." not in table_lower and bare_name in self._allowed_tables
+            )
+            if not allowed:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.TABLE_NOT_IN_ALLOWLIST,
+                        detail=f"Table '{table_name}' is not in the allowed schema.",
+                        user_message="Query references a table that is not available.",
+                    )
+                )
+
+        # ── Rule 4b: Column exclusions ───────────────────────────────────
+        table_aliases = {
+            node.alias.lower(): node.name.lower()
+            for node in statement.find_all(exp.Table)
+            if node.name and node.alias
+        }
+        for star in statement.find_all(exp.Star):
+            parent = star.parent
+            qualifier = (parent.table or "").lower() if isinstance(parent, exp.Column) else ""
+            physical_table = table_aliases.get(qualifier, qualifier)
+            blocked = (
+                self._excluded_columns.get(physical_table, set())
+                if physical_table
+                else {
+                    column
+                    for ref in referenced_tables
+                    for column in self._excluded_columns.get(ref.lower().rsplit(".", 1)[-1], set())
+                }
+            )
+            if blocked:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.COLUMN_NOT_ALLOWED,
+                        detail="Wildcard selection would expose a protected column.",
+                        user_message="The query selects protected columns.",
+                    )
+                )
+        for column_node in statement.find_all(exp.Column):
+            column_name = (column_node.name or "").lower()
+            table_name = (column_node.table or "").lower()
+            if table_name:
+                physical_table = table_aliases.get(table_name, table_name)
+                blocked = self._excluded_columns.get(physical_table, set())
+                if column_name in blocked:
                     violations.append(
                         ValidationViolation(
-                            violation_type=ViolationType.TABLE_NOT_IN_ALLOWLIST,
-                            detail=f"Table '{table_name}' is not in the allowed schema.",
-                            user_message="Query references a table that is not available.",
+                            violation_type=ViolationType.COLUMN_NOT_ALLOWED,
+                            detail=f"Column '{physical_table}.{column_name}' is excluded by policy.",
+                            user_message="The query references a protected column.",
                         )
                     )
+            elif any(column_name in columns for columns in self._excluded_columns.values()):
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.COLUMN_NOT_ALLOWED,
+                        detail=f"Column '{column_name}' is excluded by policy.",
+                        user_message="The query references a protected column.",
+                    )
+                )
 
-        # ── Rule 5: Dangerous functions ────────────────────────────────────
+        # ── Rule 5: Dangerous functions ───────────────────────────────────
+
         for func_node in statement.find_all(exp.Anonymous, exp.Func):
             func_name = ""
             if isinstance(func_node, exp.Anonymous):
@@ -365,6 +494,56 @@ class SQLValidator:
                 )
             )
 
+        # ── Rule 7: Database row policies ─────────────────────────────────
+        # Apply trusted predicates after validation and before SQL rendering so
+        # an LLM cannot omit a configured tenant/visibility condition. UNION
+        # branches are rejected when a policy is configured because applying a
+        # predicate only to the outer SELECT would be ambiguous.
+        applicable_filters = [
+            (table, predicate)
+            for table, predicate in self._row_filters.items()
+            if any(
+                ref.lower() == table or ref.lower().rsplit(".", 1)[-1] == table
+                for ref in referenced_tables
+            )
+        ]
+        if applicable_filters:
+            targets = list(statement.find_all(exp.Select))
+            if not isinstance(statement, exp.Select) or len(targets) != 1:
+                violations.append(
+                    ValidationViolation(
+                        violation_type=ViolationType.ROW_FILTER_INVALID,
+                        detail="Configured row policy cannot be safely applied to this query shape.",
+                        user_message="This query shape is not permitted for the selected data policy.",
+                    )
+                )
+            else:
+                select = targets[0]
+                aliases = {
+                    node.name.lower(): (node.alias or node.name)
+                    for node in select.find_all(exp.Table)
+                    if node.name
+                }
+                for table, predicate in applicable_filters:
+                    try:
+                        policy_expression = sqlglot.parse_one(predicate, dialect=dialect)
+                    except Exception as exc:
+                        violations.append(
+                            ValidationViolation(
+                                violation_type=ViolationType.ROW_FILTER_INVALID,
+                                detail=f"Configured row policy for '{table}' could not be parsed: {exc}",
+                                user_message="The selected data policy is invalid.",
+                            )
+                        )
+                        continue
+                    alias = aliases.get(table)
+                    if alias and alias != table:
+                        for column_node in policy_expression.find_all(exp.Column):
+                            if (column_node.table or "").lower() == table:
+                                column_node.set("table", exp.Identifier(this=alias))
+                    select = select.where(policy_expression)
+                statement = select
+
         # ── Determine safety ───────────────────────────────────────────────
         if violations:
             return ValidationResult(
@@ -375,14 +554,41 @@ class SQLValidator:
             )
 
         # ── LIMIT injection ────────────────────────────────────────────────
-        normalised = stripped
-        if self._inject_limit and isinstance(statement, exp.Select):
-            if statement.args.get("limit") is None:
-                normalised = (
-                    sqlglot.parse_one(stripped, dialect=dialect)
-                    .limit(self._default_limit)
-                    .sql(dialect=dialect)
-                )
+        normalised = statement.sql(dialect=dialect) if applicable_filters else stripped
+        if self._inject_limit:
+            parsed = statement
+            existing_limit = parsed.args.get("limit") if hasattr(parsed, "args") else None
+            limit_value: int | None = None
+            if existing_limit is not None:
+                expression = existing_limit.args.get("expression")
+                if isinstance(expression, exp.Literal) and not expression.is_string:
+                    try:
+                        limit_value = int(expression.this)
+                    except (TypeError, ValueError):
+                        limit_value = None
+                if limit_value is None or limit_value < 0 or limit_value > self._default_limit:
+                    parsed = parsed.limit(self._default_limit)
+                    normalised = parsed.sql(dialect=dialect)
+                    if limit_value is not None and limit_value > self._default_limit:
+                        violations.append(
+                            ValidationViolation(
+                                violation_type=ViolationType.LIMIT_EXCEEDED,
+                                detail=f"Requested LIMIT {limit_value} exceeds policy maximum {self._default_limit}.",
+                                user_message="This query exceeds the maximum result size.",
+                            )
+                        )
+            else:
+                # `limit()` on a UNION applies to the complete set, avoiding
+                # the unbounded result path that a Select-only check misses.
+                normalised = parsed.limit(self._default_limit).sql(dialect=dialect)
+
+        if violations:
+            return ValidationResult(
+                is_safe=False,
+                violations=violations,
+                tables_referenced=list(referenced_tables),
+                parse_time_ms=(time.perf_counter() - start) * 1000,
+            )
 
         return ValidationResult(
             is_safe=True,
@@ -410,12 +616,15 @@ class SQLValidator:
         tables: set[str] = set()
         for table_node in statement.find_all(exp.Table):
             name = table_node.name
-            if name and name.lower() in cte_names:
-                continue
+            # Only an unqualified reference can resolve to a CTE.  A
+            # qualified `private.secrets` remains a physical table even if a
+            # CTE named `secrets` exists in the query.
             db = table_node.args.get("db")
-            schema = table_node.args.get("catalog")
-            parts = [p for p in [schema, db, name] if p]
-            tables.add(".".join(str(p) for p in parts))
+            catalog = table_node.args.get("catalog")
+            if name and not db and not catalog and name.lower() in cte_names:
+                continue
+            parts = [p for p in [catalog, db, name] if p]
+            tables.add(".".join(getattr(p, "name", str(p)) for p in parts))
         return tables
 
     def _measure_subquery_depth(self, node: exp.Expression, current_depth: int = 0) -> int:

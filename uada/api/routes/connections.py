@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, SecretStr
 
 router = APIRouter(prefix="/connections", tags=["connections"])
@@ -22,6 +22,16 @@ def _get_mgr(request: Request):
     if mgr is None:
         raise HTTPException(status_code=503, detail="Connection manager not initialised.")
     return mgr
+
+
+def _scope(request: Request) -> tuple[str | None, bool]:
+    """Return the request's connection owner scope and admin flag."""
+    policy = getattr(request.state, "connection_policy", None)
+    if policy is None:
+        return "anonymous", False
+    if getattr(policy, "role", "viewer") == "admin":
+        return None, True
+    return getattr(policy, "user_id", "anonymous"), False
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -83,6 +93,7 @@ class SchemaRefreshResponse(BaseModel):
     schema_fingerprint: str
     table_count: int
     column_count: int
+    relationship_count: int
     profiled_table_count: int
     profiled_column_count: int
     tables: list[TableRefreshSummary] = Field(default_factory=list)
@@ -91,7 +102,9 @@ class SchemaRefreshResponse(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("", status_code=201, response_model=ConnectionCreatedResponse)
-async def create_connection(body: ConnectionCreateRequest, mgr=Depends(_get_mgr)):
+async def create_connection(
+    body: ConnectionCreateRequest, request: Request, mgr=Depends(_get_mgr)
+):
     """Register a new database connection. Password is accepted but NEVER returned."""
     from uada.db.connection_manager import ConnectionConfig
 
@@ -106,18 +119,19 @@ async def create_connection(body: ConnectionCreateRequest, mgr=Depends(_get_mgr)
         ssl=body.ssl,
         extra=body.extra,
     )
-    connection_id = mgr.register(config)
+    owner_id, is_admin = _scope(request)
+    connection_id = mgr.register(config, owner_id=owner_id)
     logger.info("Registered connection %s (dialect=%s)", connection_id, body.dialect)
 
     test_result = None
     if body.test_on_create:
         try:
-            r = mgr.test_connection(connection_id)
-            test_result = {"ok": r.ok, "latency_ms": r.latency_ms,
+            r = mgr.test_connection(connection_id, owner_id=owner_id, admin=is_admin)
+            test_result = {"ok": r.success, "latency_ms": r.latency_ms,
                            "server_version": r.server_version, "error": r.error}
         except Exception as exc:
             logger.warning("test_on_create failed for %s: %s", connection_id, exc)
-            test_result = {"ok": False, "error": str(exc)}
+            test_result = {"ok": False, "error": "Connection test failed."}
 
     return ConnectionCreatedResponse(
         connection_id=connection_id, name=body.name,
@@ -126,61 +140,134 @@ async def create_connection(body: ConnectionCreateRequest, mgr=Depends(_get_mgr)
 
 
 @router.get("")
-async def list_connections(mgr=Depends(_get_mgr)) -> dict[str, Any]:
+async def list_connections(request: Request, mgr=Depends(_get_mgr)) -> dict[str, Any]:
     """List all registered connections. Credentials are NEVER included."""
-    summaries = mgr.list_connections()
+    owner_id, is_admin = _scope(request)
+    summaries = mgr.list_connections(owner_id=owner_id, admin=is_admin)
     return {"connections": [s.model_dump() for s in summaries]}
 
 
 @router.get("/{connection_id}")
-async def get_connection(connection_id: str, mgr=Depends(_get_mgr)) -> dict[str, Any]:
+async def get_connection(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> dict[str, Any]:
     """Get a single connection summary. Credentials are NEVER included."""
-    summary = mgr.get_summary(connection_id)
+    owner_id, is_admin = _scope(request)
+    summary = mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin)
     if summary is None:
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
     return summary.model_dump()
 
 
+@router.get("/{connection_id}/schema", response_model=SchemaRefreshResponse)
+async def browse_schema(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> SchemaRefreshResponse:
+    """Return reflected schema metadata without running expensive column profiles."""
+    owner_id, is_admin = _scope(request)
+    if mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin) is None:
+        raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
+    try:
+        adapter = mgr.get_adapter(connection_id, owner_id=owner_id, admin=is_admin)
+        raw = adapter.get_raw_schema()
+    except Exception as exc:
+        logger.warning("Schema browsing failed for %s: %s", connection_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not inspect the selected database.",
+        ) from exc
+
+    tables = [
+        TableRefreshSummary(
+            table_name=table.name,
+            column_count=len(table.columns),
+            columns=[
+                ColumnRefreshSummary(
+                    column_name=column.name,
+                    data_type=column.data_type,
+                    is_temporal=any(
+                        token in column.data_type.lower()
+                        for token in ("date", "time", "timestamp")
+                    ),
+                )
+                for column in table.columns
+            ],
+        )
+        for table in raw.tables
+    ]
+    relationships = sum(
+        1 for table in raw.tables for column in table.columns if column.is_foreign_key
+    )
+    return SchemaRefreshResponse(
+        connection_id=connection_id,
+        schema_fingerprint=raw.schema_fingerprint,
+        table_count=len(raw.tables),
+        column_count=sum(len(table.columns) for table in raw.tables),
+        relationship_count=relationships,
+        profiled_table_count=0,
+        profiled_column_count=0,
+        tables=tables,
+    )
+
+
 @router.delete("/{connection_id}", status_code=204)
-async def delete_connection(connection_id: str, mgr=Depends(_get_mgr)) -> None:
+async def delete_connection(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> None:
     """Remove a registered connection and close its pool."""
     try:
-        mgr.delete_connection(connection_id)
-    except KeyError:
+        owner_id, is_admin = _scope(request)
+        mgr.delete_connection(connection_id, owner_id=owner_id, admin=is_admin)
+    except (KeyError, PermissionError):
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
     logger.info("Deleted connection %s", connection_id)
 
 
 @router.post("/{connection_id}/test", response_model=TestConnectionResponse)
-async def test_connection(connection_id: str, mgr=Depends(_get_mgr)) -> TestConnectionResponse:
+async def test_connection(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> TestConnectionResponse:
     """Run SELECT 1 against the connection and return latency + server version."""
-    if mgr.get_summary(connection_id) is None:
+    owner_id, is_admin = _scope(request)
+    if mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin) is None:
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
     try:
-        r = mgr.test_connection(connection_id)
-        return TestConnectionResponse(ok=r.ok, latency_ms=r.latency_ms,
+        r = mgr.test_connection(connection_id, owner_id=owner_id, admin=is_admin)
+        return TestConnectionResponse(ok=r.success, latency_ms=r.latency_ms,
                                       server_version=r.server_version, error=r.error)
     except Exception as exc:
-        return TestConnectionResponse(ok=False, error=str(exc))
+        logger.warning("Connection test endpoint failed for %s: %s", connection_id, exc)
+        return TestConnectionResponse(ok=False, error="Connection test failed.")
 
 
 @router.post("/{connection_id}/discover", response_model=DiscoverResponse)
-async def discover_schema(connection_id: str, mgr=Depends(_get_mgr)) -> DiscoverResponse:
+async def discover_schema(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> DiscoverResponse:
     """Reflect the database schema: table/column/FK counts, row estimates."""
-    if mgr.get_summary(connection_id) is None:
+    owner_id, is_admin = _scope(request)
+    if mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin) is None:
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
     try:
-        r = mgr.discover_schema(connection_id)
-        return DiscoverResponse(table_count=r.table_count, column_count=r.column_count,
-                                relationship_count=r.relationship_count, row_estimate=r.row_estimate)
+        r = mgr.discover_schema(connection_id, owner_id=owner_id, admin=is_admin)
+        return DiscoverResponse(
+            table_count=r.table_count,
+            column_count=r.column_count,
+            relationship_count=r.relationship_count,
+            row_estimate=r.row_estimate,
+        )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("Schema discovery failed for %s: %s", connection_id, exc)
+        raise HTTPException(status_code=500, detail="Schema discovery failed.") from exc
 
 
 @router.post("/{connection_id}/profile")
-async def profile_connection(connection_id: str, mgr=Depends(_get_mgr)) -> dict[str, Any]:
+async def profile_connection(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> dict[str, Any]:
     """Deprecated stub — use /refresh instead."""
-    summary = mgr.get_summary(connection_id)
+    owner_id, is_admin = _scope(request)
+    summary = mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin)
     if summary is None:
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
     return {
@@ -192,25 +279,32 @@ async def profile_connection(connection_id: str, mgr=Depends(_get_mgr)) -> dict[
 
 
 @router.post("/{connection_id}/refresh", response_model=SchemaRefreshResponse)
-async def refresh_schema(connection_id: str, mgr=Depends(_get_mgr)) -> SchemaRefreshResponse:
+async def refresh_schema(
+    connection_id: str, request: Request, mgr=Depends(_get_mgr)
+) -> SchemaRefreshResponse:
     """
     Reflect the full schema and run per-column profiling (null%, distinct count,
     min/max, temporal range).  Sample values are computed internally but NEVER
     returned in the response or written to logs.
     """
-    if mgr.get_summary(connection_id) is None:
+    owner_id, is_admin = _scope(request)
+    if mgr.get_summary(connection_id, owner_id=owner_id, admin=is_admin) is None:
         raise HTTPException(status_code=404, detail=f"Connection {connection_id!r} not found.")
 
     from uada.pipeline.data_profiler import DataProfiler
 
     try:
-        adapter = mgr.get_adapter(connection_id)
+        adapter = mgr.get_adapter(connection_id, owner_id=owner_id, admin=is_admin)
         raw = adapter.get_raw_schema()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not connect: {exc}") from exc
+        logger.warning("Schema refresh connection failed for %s: %s", connection_id, exc)
+        raise HTTPException(status_code=500, detail="Could not connect to the selected database.") from exc
 
     allowed_tables = frozenset(t.name for t in raw.tables)
     total_columns = sum(len(t.columns) for t in raw.tables)
+    relationship_count = sum(
+        1 for table in raw.tables for column in table.columns if column.is_foreign_key
+    )
 
     # Run profiling (best-effort; individual table failures are skipped)
     try:
@@ -267,6 +361,7 @@ async def refresh_schema(connection_id: str, mgr=Depends(_get_mgr)) -> SchemaRef
         schema_fingerprint=raw.schema_fingerprint,
         table_count=len(raw.tables),
         column_count=total_columns,
+        relationship_count=relationship_count,
         profiled_table_count=profiled_table_count,
         profiled_column_count=profiled_cols,
         tables=table_summaries,

@@ -118,12 +118,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.role = "viewer"
         request.state.connection_policy = ConnectionPolicy("anonymous", "viewer")
 
-        # Public paths bypass all auth
+        # Liveness and static UI paths stay reachable by load balancers before
+        # application credentials are available. Query and mutation routes
+        # remain protected by the configured API key or JWT policy.
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
 
         if self._rbac_enabled and self._jwt_secret:
             return await self._jwt_dispatch(request, call_next)
+        elif self._rbac_enabled and not self._jwt_secret:
+            # A deployment that explicitly enables RBAC without a verifier
+            # must fail closed.  Falling through to dev-admin mode would turn
+            # a configuration mistake into an authentication bypass.
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "RBAC is enabled but JWT verification is not configured."},
+            )
         elif self._api_key:
             return await self._api_key_dispatch(request, call_next)
         else:
@@ -170,7 +180,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 status_code=401, content={"detail": "Invalid or expired JWT."}
             )
 
-        user_id: str = payload.get("sub", "unknown")
+        user_id = payload.get("sub")
+        if not isinstance(user_id, str) or not user_id.strip():
+            # A token without a stable subject cannot be associated with an
+            # owner, audit trail, or tenant. Reject it rather than silently
+            # assigning the request to an anonymous identity.
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "JWT subject (sub) is required."},
+            )
+        user_id = user_id.strip()
         role: str = payload.get("role", "viewer")
         if role not in _ROLE_RANK:
             logger.warning("JWT for user '%s' has unknown role '%s'; defaulting to viewer.", user_id, role)
@@ -211,6 +230,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": f"Role '{policy.role}' cannot modify connections."},
+                )
+
+        # Analysts may save and remove analyses; viewers can only read/query.
+        if path.startswith("/analyses") and method in {"POST", "DELETE", "PUT", "PATCH"}:
+            if policy._rank < _ROLE_RANK["analyst"]:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Role '{policy.role}' cannot modify saved analyses."},
+                )
+
+        if path.startswith("/session/") and method == "DELETE":
+            if policy._rank < _ROLE_RANK["analyst"]:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Role '{policy.role}' cannot delete sessions."},
                 )
 
         return None

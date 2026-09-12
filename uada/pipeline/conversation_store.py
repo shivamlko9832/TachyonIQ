@@ -66,11 +66,13 @@ class ConversationStore:
         return f"uada:{self._database_id}:{session_id}"
 
     # ── Public interface ──────────────────────────────────────────────────────
-    async def load(self, session_id: str) -> ConversationState:
+    async def load(
+        self, session_id: str, *, owner_id: str | None = None
+    ) -> ConversationState:
         """Return the session's ConversationState, creating a fresh one if absent."""
         if self._redis is not None:
-            return await self._redis_load(session_id)
-        return await self._mem_load(session_id)
+            return await self._redis_load(session_id, owner_id=owner_id)
+        return await self._mem_load(session_id, owner_id=owner_id)
 
     async def save(self, state: ConversationState) -> None:
         """Persist the state, compressing old turns if over the max-turns limit."""
@@ -82,51 +84,77 @@ class ConversationStore:
         else:
             await self._mem_save(state)
 
-    async def delete(self, session_id: str) -> None:
+    async def delete(self, session_id: str, *, owner_id: str | None = None) -> None:
         """Remove a session from the store."""
         if self._redis is not None:
             try:
+                state = await self._redis_load(session_id, owner_id=owner_id)
                 await self._redis.delete(self._redis_key(session_id))  # type: ignore[union-attr]
+            except PermissionError:
+                raise
             except Exception as exc:
                 logger.warning("Redis delete failed for %s: %s", session_id, exc)
         else:
+            state = self._sessions.get(session_id)
+            if state is not None and owner_id is not None and state.owner_id != owner_id:
+                raise PermissionError("Session is not available to this identity.")
             self._sessions.pop(session_id, None)
 
     # ── In-memory backend ─────────────────────────────────────────────────────
-    async def _mem_load(self, session_id: str) -> ConversationState:
+    async def _mem_load(
+        self, session_id: str, *, owner_id: str | None = None
+    ) -> ConversationState:
         if session_id not in self._sessions:
             now = datetime.now(tz=UTC)
             self._sessions[session_id] = ConversationState(
                 session_id=session_id,
+                owner_id=owner_id,
                 database_id=self._database_id,
                 created_at=now,
                 last_updated=now,
             )
             logger.info("New in-memory session '%s'.", session_id)
-        return self._sessions[session_id]
+        state = self._sessions[session_id]
+        self._check_owner(state, owner_id)
+        return state
 
     async def _mem_save(self, state: ConversationState) -> None:
         self._sessions[state.session_id] = state
 
     # ── Redis backend ─────────────────────────────────────────────────────────
-    async def _redis_load(self, session_id: str) -> ConversationState:
+    async def _redis_load(
+        self, session_id: str, *, owner_id: str | None = None
+    ) -> ConversationState:
         key = self._redis_key(session_id)
         try:
             raw = await self._redis.get(key)  # type: ignore[union-attr]
             if raw:
-                return ConversationState.model_validate_json(raw)
+                state = ConversationState.model_validate_json(raw)
+                self._check_owner(state, owner_id)
+                return state
+        except PermissionError:
+            raise
         except Exception as exc:
             logger.warning("Redis load failed for %s: %s — creating fresh session.", session_id, exc)
 
         now = datetime.now(tz=UTC)
         state = ConversationState(
             session_id=session_id,
+            owner_id=owner_id,
             database_id=self._database_id,
             created_at=now,
             last_updated=now,
         )
         logger.info("New Redis session '%s'.", session_id)
         return state
+
+    @staticmethod
+    def _check_owner(state: ConversationState, owner_id: str | None) -> None:
+        """Reject cross-user access while preserving internal/admin reads."""
+        if owner_id is not None and state.owner_id != owner_id:
+            if state.owner_id is None:
+                raise PermissionError("Legacy session is not available to this identity.")
+            raise PermissionError("Session is not available to this identity.")
 
     async def _redis_save(self, state: ConversationState) -> None:
         key = self._redis_key(state.session_id)

@@ -406,11 +406,20 @@ class Replanner:
 
         Drop all resolved filters to widen the result set and remove any LIMIT.
         """
-        if plan.filters:
-            n = len(plan.filters)
-            plan.filters.clear()
+        removable = [
+            filt for filt in plan.filters
+            if not filt.original_semantic_filter.startswith(("metric:", "policy:"))
+        ]
+        protected_count = len(plan.filters) - len(removable)
+        if removable:
+            plan.filters = [filt for filt in plan.filters if filt not in removable]
             applied.append(
-                f"insufficient_sample: removed {n} filter(s) to increase sample size."
+                f"insufficient_sample: removed {len(removable)} user filter(s) "
+                "to increase sample size."
+            )
+        elif protected_count:
+            skipped.append(
+                "insufficient_sample: retained metric/policy filters required for correctness."
             )
         else:
             skipped.append(

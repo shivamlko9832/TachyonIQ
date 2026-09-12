@@ -195,6 +195,13 @@ class ResultCritic:
         anomaly_flagged = any(d.name == "result_anomaly" and not d.passed for d in dims)
         empty_result = any(d.name == "empty_result" and not d.passed for d in dims)
 
+        # An empty result cannot support a trustworthy answer regardless of how
+        # well the other structural checks happen to score.  Treat this as a
+        # hard failure so the orchestrator can replan instead of presenting a
+        # polished response backed by no evidence.
+        if empty_result:
+            score = 0.0
+
         is_sufficient = score >= self.SUFFICIENCY_THRESHOLD
 
         if not is_sufficient:

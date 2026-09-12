@@ -73,10 +73,11 @@ class Settings(BaseSettings):
         description="Maximum seconds a generated SQL query may run.",
     )
     db_max_rows: int = Field(
-        default=1000,
+        default=5000,
         ge=1,
         le=50_000,
-        description="Maximum rows returned per query. Enforced post-execution.",
+        description="Maximum rows returned per query. Enforced post-execution; the default "
+                    "supports population-level analysis in the dense demo dataset.",
     )
     db_pool_size: int = Field(default=5, ge=1, le=50)
     db_pool_recycle_seconds: int = Field(default=1800)
@@ -157,6 +158,11 @@ class Settings(BaseSettings):
         default=4096,
         description="Maximum user question length (characters). Longer inputs rejected.",
     )
+    strict_semantic_resolution: bool = Field(
+        default=True,
+        description="Fail closed when a production intent names an unknown metric "
+                    "or dimension instead of guessing a physical column.",
+    )
 
     # ── Conversation ──────────────────────────────────────────────────────────
     conversation_max_turns: int = Field(
@@ -236,6 +242,11 @@ class Settings(BaseSettings):
         description="Additional burst allowance above rate_limit_rpm. "
                     "Total capacity = rpm + burst.",
     )
+    trust_proxy_headers: bool = Field(
+        default=False,
+        description="Trust X-Forwarded-For for rate-limit identity only when a "
+                    "known reverse proxy strips and rewrites the header.",
+    )
 
     # ── Result quality (P4) ──────────────────────────────────────────────────
     enable_result_critic: bool = Field(
@@ -268,6 +279,16 @@ class Settings(BaseSettings):
         if not v.strip():
             raise ValueError("llm_model must not be empty")
         return v.strip()
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def empty_api_key_is_disabled(cls, v: object) -> object:
+        """Treat an empty environment value as disabled local authentication."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        if isinstance(v, SecretStr) and not v.get_secret_value().strip():
+            return None
+        return v
 
 
 # Module-level singleton — import and use directly.

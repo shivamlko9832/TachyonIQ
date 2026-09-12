@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Dialects that ship with the core SQLAlchemy install (no extra driver needed).
-_BUILTIN_DIALECTS = frozenset({"postgresql", "mysql", "sqlite", "mssql", "duckdb"})
+_BUILTIN_DIALECTS = frozenset({"postgresql", "mysql", "sqlite", "mssql"})
 
 
 class AdapterRegistry:
@@ -48,6 +48,10 @@ class AdapterRegistry:
         if dialect == "redshift":
             from uada.db.adapters.redshift import RedshiftAdapter
             return RedshiftAdapter(config, settings)
+
+        if dialect == "duckdb":
+            from uada.db.adapters.duckdb import DuckDBAdapter
+            return DuckDBAdapter(config, settings)
 
         # Fallback: try SQLAlchemy anyway — the caller may have installed a
         # third-party dialect. If the URL is invalid the engine creation fails

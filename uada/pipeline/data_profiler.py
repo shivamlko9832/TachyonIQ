@@ -81,20 +81,29 @@ class DataProfiler:
         """
         schema_profile = SchemaProfile()
         raw_schema = adapter.get_raw_schema()
+        # Profiling emits SQL from reflected identifiers.  It still goes
+        # through the same AST boundary as user-generated SQL; introspection
+        # is trusted metadata, not permission to bypass the execution gate.
+        from uada.pipeline.sql_validator import SQLValidator
+        validator = SQLValidator(
+            allowed_tables=set(allowed_tables),
+            inject_limit=True,
+            default_limit=_SAMPLE_LIMIT,
+        )
 
         for table_info in raw_schema.tables:
             tname = table_info.name
             if tname not in allowed_tables:
                 continue
             try:
-                tp = self._profile_table(adapter, table_info, timeout_s)
+                tp = self._profile_table(adapter, table_info, timeout_s, validator)
                 schema_profile.tables[tname] = tp
             except Exception as exc:
                 logger.warning("DataProfiler: skipping table %s — %s", tname, exc)
 
         return schema_profile
 
-    def _profile_table(self, adapter: DatabaseAdapter, table_info, timeout_s: int) -> TableProfile:
+    def _profile_table(self, adapter: DatabaseAdapter, table_info, timeout_s: int, validator) -> TableProfile:
         from uada.db.interface import QueryExecutionError, QueryTimeoutError
 
         tname = table_info.name
@@ -102,27 +111,25 @@ class DataProfiler:
         # Row count
         row_count: int | None = None
         try:
-            rc = adapter.execute_query(
-                f"SELECT COUNT(*) AS __n FROM {tname}",
-                timeout_seconds=timeout_s,
-                max_rows=1,
-            )
+            rc = self._execute(adapter, validator, f"SELECT COUNT(*) AS __n FROM {self._quote(tname)}", timeout_s, 1)
             if rc.rows:
-                row_count = int(rc.rows[0].get("__n", 0))
+                row_count = int(rc.rows[0][0] or 0)
         except (QueryExecutionError, QueryTimeoutError) as e:
             logger.debug("Row count failed for %s: %s", tname, e)
 
         col_profiles: list[ColumnProfile] = []
         for col in table_info.columns:
-            cp = self._profile_column(adapter, tname, col, timeout_s)
+            cp = self._profile_column(adapter, tname, col, timeout_s, validator)
             col_profiles.append(cp)
 
         return TableProfile(table_name=tname, row_count=row_count, columns=col_profiles)
 
-    def _profile_column(self, adapter: DatabaseAdapter, tname: str, col, timeout_s: int) -> ColumnProfile:
+    def _profile_column(self, adapter: DatabaseAdapter, tname: str, col, timeout_s: int, validator) -> ColumnProfile:
         from uada.db.interface import QueryExecutionError, QueryTimeoutError
 
         cname = col.name
+        qtable = self._quote(tname)
+        qcolumn = self._quote(cname)
         dtype = col.data_type or "unknown"
         is_temporal = any(t in dtype.lower() for t in ("date", "time", "timestamp"))
 
@@ -133,43 +140,59 @@ class DataProfiler:
             sql = (
                 f"SELECT "
                 f"  COUNT(*) AS __total, "
-                f"  COUNT({cname}) AS __non_null, "
-                f"  COUNT(DISTINCT {cname}) AS __distinct "
-                f"FROM {tname}"
+                f"  COUNT({qcolumn}) AS __non_null, "
+                f"  COUNT(DISTINCT {qcolumn}) AS __distinct "
+                f"FROM {qtable}"
             )
-            r = adapter.execute_query(sql, timeout_seconds=timeout_s, max_rows=1)
+            r = self._execute(adapter, validator, sql, timeout_s, 1)
             if r.rows:
                 row = r.rows[0]
-                total = int(row.get("__total") or 0)
-                non_null = int(row.get("__non_null") or 0)
+                total = int(row[0] or 0)
+                non_null = int(row[1] or 0)
                 cp.null_pct = round(1 - non_null / total, 4) if total else None
-                cp.distinct_count = int(row.get("__distinct") or 0)
-        except (QueryExecutionError, QueryTimeoutError, Exception) as e:
+                cp.distinct_count = int(row[2] or 0)
+        except Exception as e:
             logger.debug("Null/distinct failed for %s.%s: %s", tname, cname, e)
 
         # Min / max (skip for non-comparable types)
         if dtype.lower() not in ("json", "jsonb", "bytea", "blob", "text", "clob"):
             try:
-                r = adapter.execute_query(
-                    f"SELECT MIN({cname}) AS __min, MAX({cname}) AS __max FROM {tname}",
-                    timeout_seconds=timeout_s,
-                    max_rows=1,
+                sql = (
+                    f"SELECT MIN({qcolumn}) AS __min, MAX({qcolumn}) AS __max FROM {qtable}"
                 )
+                r = self._execute(adapter, validator, sql, timeout_s, 1)
                 if r.rows:
-                    cp.min_value = str(r.rows[0].get("__min", "")) or None
-                    cp.max_value = str(r.rows[0].get("__max", "")) or None
+                    cp.min_value = str(r.rows[0][0]) if r.rows[0][0] is not None else None
+                    cp.max_value = str(r.rows[0][1]) if r.rows[0][1] is not None else None
             except Exception as e:
                 logger.debug("Min/max failed for %s.%s: %s", tname, cname, e)
 
         # Sample values — held in memory only, never in prompts/logs
         try:
-            r = adapter.execute_query(
-                f"SELECT DISTINCT {cname} AS __v FROM {tname} WHERE {cname} IS NOT NULL LIMIT {_SAMPLE_LIMIT}",
-                timeout_seconds=timeout_s,
-                max_rows=_SAMPLE_LIMIT,
+            sql = (
+                f"SELECT DISTINCT {qcolumn} AS __v FROM {qtable} WHERE {qcolumn} IS NOT NULL"
             )
-            cp.sample_values = [str(row.get("__v", "")) for row in r.rows if row.get("__v") is not None]
+            r = self._execute(adapter, validator, sql, timeout_s, _SAMPLE_LIMIT)
+            cp.sample_values = [str(row[0]) for row in r.rows if row and row[0] is not None]
         except Exception as e:
             logger.debug("Samples failed for %s.%s: %s", tname, cname, e)
 
         return cp
+
+    @staticmethod
+    def _quote(identifier: str) -> str:
+        """Quote an introspected identifier; reject malformed names early."""
+        if not identifier or "\x00" in identifier or '"' in identifier:
+            raise ValueError("Invalid database identifier")
+        return '"' + identifier.replace('"', '""') + '"'
+
+    @staticmethod
+    def _execute(adapter, validator, sql: str, timeout_s: int, max_rows: int):
+        validation = validator.validate(sql, dialect=adapter.dialect)
+        if not validation.is_safe:
+            raise PermissionError("Profiler query failed SQL security validation")
+        return adapter.execute_query(
+            validation.normalised_sql or sql,
+            timeout_seconds=timeout_s,
+            max_rows=max_rows,
+        )

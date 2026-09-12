@@ -31,11 +31,9 @@ probes cannot exhaust the quota.
 
 Security note
 -------------
-The client key is derived from ``X-Forwarded-For`` (first address) when
-present, falling back to the ASGI ``client`` tuple.  If you terminate TLS
-at a trusted proxy that always sets ``X-Forwarded-For``, this is correct.
-If the app is exposed directly to the internet, remove the
-``X-Forwarded-For`` path to prevent clients from spoofing their IP.
+The client key uses ``X-Forwarded-For`` only when the explicit
+``trust_proxy_headers`` setting is enabled; otherwise it uses the ASGI
+``client`` tuple. This prevents direct clients from spoofing their quota key.
 """
 
 from __future__ import annotations
@@ -135,6 +133,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         super().__init__(app)
         self._enabled = settings.rate_limit_enabled
+        self._trust_proxy_headers = bool(getattr(settings, "trust_proxy_headers", False))
         capacity = settings.rate_limit_rpm + settings.rate_limit_burst
         self._window = _SlidingWindow(capacity=capacity)
         logger.debug(
@@ -166,11 +165,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
-    @staticmethod
-    def _client_key(request: Request) -> str:
+    def _client_key(self, request: Request) -> str:
         """Derive a stable identifier for the client making this request."""
         forwarded = request.headers.get("X-Forwarded-For", "")
-        if forwarded:
+        if self._trust_proxy_headers and forwarded:
             # Use only the first (leftmost = client) address.
             return forwarded.split(",")[0].strip()
         if request.client:

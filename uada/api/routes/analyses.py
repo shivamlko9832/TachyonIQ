@@ -33,6 +33,15 @@ def _get_store(request: Request):
     return store
 
 
+def _owner_scope(request: Request) -> str | None:
+    policy = getattr(request.state, "connection_policy", None)
+    if policy is None:
+        return "anonymous"
+    if getattr(policy, "role", "viewer") == "admin":
+        return None
+    return getattr(policy, "user_id", "anonymous")
+
+
 # ── Request / Response models ─────────────────────────────────────────────────
 
 class SaveAnalysisRequest(BaseModel):
@@ -84,6 +93,7 @@ class DeleteAnalysisResponse(BaseModel):
 @router.post("", response_model=SaveAnalysisResponse, status_code=201)
 async def save_analysis(
     body: SaveAnalysisRequest,
+    request: Request,
     store=Depends(_get_store),
 ) -> SaveAnalysisResponse:
     """Save a query result as a named analysis for later replay."""
@@ -96,12 +106,14 @@ async def save_analysis(
         response=body.response,
         connection_id=body.connection_id,
         tags=body.tags,
+        owner_id=_owner_scope(request),
     )
     return SaveAnalysisResponse(id=analysis_id, name=body.name)
 
 
 @router.get("", response_model=ListAnalysesResponse)
 async def list_analyses(
+    request: Request,
     connection_id: str | None = Query(default=None, description="Filter by connection ID."),
     tag: str | None = Query(default=None, description="Filter by tag (single tag match)."),
     limit: int = Query(default=50, ge=1, le=200),
@@ -109,8 +121,15 @@ async def list_analyses(
     store=Depends(_get_store),
 ) -> ListAnalysesResponse:
     """List saved analyses, newest first.  Optionally filter by connection or tag."""
-    rows = store.list(connection_id=connection_id, tag=tag, limit=limit, offset=offset)
-    total = store.count(connection_id=connection_id)
+    owner_id = _owner_scope(request)
+    rows = store.list(
+        connection_id=connection_id,
+        tag=tag,
+        limit=limit,
+        offset=offset,
+        owner_id=owner_id,
+    )
+    total = store.count(connection_id=connection_id, owner_id=owner_id)
     summaries = [
         AnalysisSummary(
             id=r["id"],
@@ -129,12 +148,13 @@ async def list_analyses(
 @router.get("/{analysis_id}", response_model=AnalysisDetail)
 async def get_analysis(
     analysis_id: str,
+    request: Request,
     store=Depends(_get_store),
 ) -> AnalysisDetail:
     """Retrieve the full saved analysis including the UADAResponse payload."""
     import json
 
-    row = store.get(analysis_id)
+    row = store.get(analysis_id, owner_id=_owner_scope(request))
     if row is None:
         raise HTTPException(status_code=404, detail=f"Analysis {analysis_id!r} not found.")
 
@@ -161,10 +181,11 @@ async def get_analysis(
 @router.delete("/{analysis_id}", response_model=DeleteAnalysisResponse)
 async def delete_analysis(
     analysis_id: str,
+    request: Request,
     store=Depends(_get_store),
 ) -> DeleteAnalysisResponse:
     """Permanently delete a saved analysis."""
-    deleted = store.delete(analysis_id)
+    deleted = store.delete(analysis_id, owner_id=_owner_scope(request))
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Analysis {analysis_id!r} not found.")
     return DeleteAnalysisResponse(id=analysis_id)

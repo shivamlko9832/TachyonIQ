@@ -4,8 +4,9 @@ Health and readiness endpoints (P4-C-3)
 
 GET /health  — Liveness probe
   Lightweight: always returns HTTP 200 while the process is alive.
-  Includes last-known database reachability from a cached background check
-  so that a single unreachable DB does not cause container restarts.
+  Reports whether the application orchestrator has been initialised without
+  performing database I/O, so a transient database outage does not cause
+  container restarts.
   Safe to call at high frequency from a load balancer.
 
 GET /ready   — Readiness probe
@@ -40,6 +41,7 @@ class HealthResponse(BaseModel):
     version: str
     uptime_seconds: float
     request_id: str | None = None
+    database: str = "unknown"
 
 
 class ReadinessCheck(BaseModel):
@@ -71,6 +73,7 @@ async def get_health(request: Request) -> HealthResponse:
         version=_VERSION,
         uptime_seconds=round(time.monotonic() - _START_TIME, 1),
         request_id=request_id,
+        database="connected" if getattr(request.app.state, "orchestrator", None) is not None else "unknown",
     )
 
 
@@ -136,17 +139,21 @@ def _check_orchestrator_db(orchestrator: Any) -> ReadinessCheck:
             name="orchestrator_db",
             status="error",
             latency_ms=latency_ms,
-            detail=str(exc)[:200],
+            detail="Database readiness check failed.",
         )
 
 
 def _check_connection_manager(conn_mgr: Any) -> ReadinessCheck:
     try:
-        count = len(getattr(conn_mgr, "_connections", {}))
+        count = len(getattr(conn_mgr, "_meta", {}))
         return ReadinessCheck(
             name="connection_manager",
             status="ok",
             detail=f"{count} connection(s) registered",
         )
-    except Exception as exc:
-        return ReadinessCheck(name="connection_manager", status="error", detail=str(exc)[:200])
+    except Exception:
+        return ReadinessCheck(
+            name="connection_manager",
+            status="error",
+            detail="Connection manager check failed.",
+        )

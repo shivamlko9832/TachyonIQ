@@ -38,6 +38,7 @@ from uada.scl.manager import SCLManager
 pytestmark = pytest.mark.unit
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "semantic_context.yaml"
+DEMO_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "demo_semantic_context.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -70,9 +71,7 @@ def _schema_context(dialect: str = "postgresql") -> SchemaContext:
             TableContext(
                 table_name="customers",
                 columns=[
-                    ColumnContext(
-                        column_name="segment", table_name="customers", data_type="str"
-                    ),
+                    ColumnContext(column_name="segment", table_name="customers", data_type="str"),
                 ],
             ),
         ],
@@ -155,9 +154,45 @@ class TestRanking:
         assert plan.order_by[0].direction == "DESC"
         assert plan.limit == 10
 
-    def test_unresolved_dimension_falls_back_to_primary_table(
-        self, planner: QueryPlanner
-    ) -> None:
+    def test_duplicate_dimension_prefers_metric_fact_table(self) -> None:
+        demo_planner = QueryPlanner(SCLManager(SCLLoader.load(DEMO_CONFIG_PATH)))
+        schema = SchemaContext(
+            tables=[
+                TableContext(
+                    table_name="customers",
+                    columns=[
+                        ColumnContext(column_name="region", table_name="customers", data_type="str")
+                    ],
+                ),
+                TableContext(
+                    table_name="marketing_performance",
+                    columns=[
+                        ColumnContext(
+                            column_name="region",
+                            table_name="marketing_performance",
+                            data_type="str",
+                        )
+                    ],
+                ),
+            ],
+            dialect="sqlite",
+            retrieval_query="marketing spend by region",
+            total_retrieved=2,
+        )
+        intent = AnalyticalIntent(
+            question_type=QuestionType.AGGREGATION,
+            measures=["marketing_spend"],
+            dimensions=["region"],
+            raw_question="Show marketing spend by region",
+        )
+
+        plan = demo_planner.plan(intent, schema)
+
+        assert plan.primary_table.table_name == "marketing_performance"
+        assert plan.dimensions[0].sql_expression == "marketing_performance.region"
+        assert plan.joins == []
+
+    def test_unresolved_dimension_falls_back_to_primary_table(self, planner: QueryPlanner) -> None:
         intent = AnalyticalIntent(
             question_type=QuestionType.RANKING,
             measures=["revenue"],
@@ -219,9 +254,7 @@ class TestFilter:
             question_type=QuestionType.FILTER,
             measures=["revenue"],
             dimensions=["region"],
-            filters=[
-                SemanticFilter(entity="region", operator=FilterOperator.EQUALS, value="EMEA")
-            ],
+            filters=[SemanticFilter(entity="region", operator=FilterOperator.EQUALS, value="EMEA")],
             raw_question="Only show EMEA.",
         )
         plan = planner.plan(intent, _schema_context())
@@ -233,9 +266,7 @@ class TestFilter:
             measures=["revenue"],
             dimensions=["region"],
             filters=[
-                SemanticFilter(
-                    entity="region", operator=FilterOperator.IN, value=["EMEA", "APAC"]
-                )
+                SemanticFilter(entity="region", operator=FilterOperator.IN, value=["EMEA", "APAC"])
             ],
             raw_question="Only EMEA or APAC.",
         )
@@ -452,8 +483,7 @@ class TestSQLiteExecutability:
         # GROUP BY groups by the alias, per standard SQL (not by repeating
         # the fragment, which would invalidly re-include "AS period").
         result = adapter.execute_query(
-            f"SELECT {plan.time_resolution.group_by_sql}, SUM(revenue) "
-            f"FROM orders GROUP BY period"
+            f"SELECT {plan.time_resolution.group_by_sql}, SUM(revenue) FROM orders GROUP BY period"
         )
         assert result.rows == [["2026-01", 300.0]]
 

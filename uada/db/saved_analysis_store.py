@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
     response    TEXT NOT NULL,   -- UADAResponse JSON
     connection_id TEXT,
     tags        TEXT,            -- JSON array of strings
+    owner_id    TEXT,            -- authenticated subject; NULL for legacy/admin rows
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -69,6 +70,13 @@ class SavedAnalysisStore:
     def _init_db(self) -> None:
         with self._lock, self._connect() as conn:
             conn.executescript(_DDL)
+            # Migrate databases created before owner scoping was introduced.
+            try:
+                conn.execute("ALTER TABLE saved_analyses ADD COLUMN owner_id TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_owner ON saved_analyses(owner_id)")
             conn.commit()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -82,6 +90,7 @@ class SavedAnalysisStore:
         response: dict[str, Any],
         connection_id: str | None = None,
         tags: list[str] | None = None,
+        owner_id: str | None = None,
         analysis_id: str | None = None,
     ) -> str:
         """
@@ -119,6 +128,7 @@ class SavedAnalysisStore:
             json.dumps(response, default=str),
             connection_id,
             json.dumps(tags or []),
+            owner_id,
             now,
             now,
         )
@@ -126,8 +136,8 @@ class SavedAnalysisStore:
             conn.execute(
                 """
                 INSERT INTO saved_analyses
-                  (id, name, question, sql_text, response, connection_id, tags, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  (id, name, question, sql_text, response, connection_id, tags, owner_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 row,
             )
@@ -135,12 +145,18 @@ class SavedAnalysisStore:
         logger.info("Saved analysis %s: %r", aid, name)
         return aid
 
-    def get(self, analysis_id: str) -> dict[str, Any] | None:
+    def get(self, analysis_id: str, *, owner_id: str | None = None) -> dict[str, Any] | None:
         """Return a single saved analysis or None if not found."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM saved_analyses WHERE id = ?", (analysis_id,)
-            ).fetchone()
+            if owner_id is None:
+                row = conn.execute(
+                    "SELECT * FROM saved_analyses WHERE id = ?", (analysis_id,)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM saved_analyses WHERE id = ? AND owner_id = ?",
+                    (analysis_id, owner_id),
+                ).fetchone()
         if row is None:
             return None
         return self._row_to_dict(row)
@@ -152,6 +168,7 @@ class SavedAnalysisStore:
         tag: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        owner_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Return saved analyses ordered by created_at DESC.
@@ -164,12 +181,15 @@ class SavedAnalysisStore:
         if connection_id is not None:
             filters.append("connection_id = ?")
             params.append(connection_id)
+        if owner_id is not None:
+            filters.append("owner_id = ?")
+            params.append(owner_id)
 
         where = ("WHERE " + " AND ".join(filters)) if filters else ""
 
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM saved_analyses {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                f"SELECT * FROM saved_analyses {where} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
                 params + [limit, offset],
             ).fetchall()
 
@@ -181,19 +201,34 @@ class SavedAnalysisStore:
 
         return results
 
-    def delete(self, analysis_id: str) -> bool:
+    def delete(self, analysis_id: str, *, owner_id: str | None = None) -> bool:
         """Delete a saved analysis. Returns True if a row was deleted."""
         with self._lock, self._connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM saved_analyses WHERE id = ?", (analysis_id,)
-            )
+            if owner_id is None:
+                cursor = conn.execute(
+                    "DELETE FROM saved_analyses WHERE id = ?", (analysis_id,)
+                )
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM saved_analyses WHERE id = ? AND owner_id = ?",
+                    (analysis_id, owner_id),
+                )
             conn.commit()
         return cursor.rowcount > 0
 
-    def count(self, *, connection_id: str | None = None) -> int:
+    def count(
+        self, *, connection_id: str | None = None, owner_id: str | None = None
+    ) -> int:
         """Return the total number of saved analyses."""
-        where = "WHERE connection_id = ?" if connection_id else ""
-        params = [connection_id] if connection_id else []
+        filters: list[str] = []
+        params: list[str] = []
+        if connection_id:
+            filters.append("connection_id = ?")
+            params.append(connection_id)
+        if owner_id:
+            filters.append("owner_id = ?")
+            params.append(owner_id)
+        where = ("WHERE " + " AND ".join(filters)) if filters else ""
         with self._connect() as conn:
             return conn.execute(
                 f"SELECT COUNT(*) FROM saved_analyses {where}", params

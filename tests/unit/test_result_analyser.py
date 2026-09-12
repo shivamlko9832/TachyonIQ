@@ -18,6 +18,7 @@ from uada.models.intent import (
     TimeRange,
     TimeRangeType,
 )
+from uada.models.query_plan import QueryPlan, ResolvedMeasure, ResolvedTable, SQLDialect
 from uada.models.result import ColumnMeta, QueryResult, TrendDirection
 from uada.pipeline.result_analyser import ResultAnalyser
 
@@ -313,6 +314,80 @@ class TestKeyFindingFallback:
         intent = _intent(QuestionType.AGGREGATION, measures=[])
         analysed = analyser.analyse(result, intent)
         assert analysed.key_finding == "revenue: 300.00"
+
+
+class TestMetricAdditivity:
+    def test_grouped_non_additive_metric_is_not_summed(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[
+                ColumnMeta(name="status", data_type="str"),
+                ColumnMeta(name="customer_count", data_type="int"),
+            ],
+            rows=[
+                ["delivered", 308],
+                ["shipped", 175],
+                ["cancelled", 135],
+                ["pending", 128],
+                ["refunded", 81],
+            ],
+        )
+        intent = _intent(
+            QuestionType.AGGREGATION,
+            measures=["customer_count"],
+            dimensions=["status"],
+        )
+        plan = QueryPlan(
+            intent_question_type="aggregation",
+            original_question="Break down customer count by status",
+            dialect=SQLDialect.SQLITE,
+            primary_table=ResolvedTable(table_name="orders"),
+            measures=[
+                ResolvedMeasure(
+                    name="customer_count",
+                    sql_expression="COUNT(DISTINCT orders.customer_id)",
+                    output_alias="customer_count",
+                    additivity="non_additive",
+                )
+            ],
+        )
+
+        analysed = analyser.analyse(result, intent, plan)
+
+        assert analysed.key_finding is None
+        assert analysed.narrative_insight is not None
+        assert "not additive" in analysed.narrative_insight
+        assert "827" not in " ".join(analysed.key_findings_bullets)
+        assert any("must not be summed" in item for item in analysed.key_findings_bullets)
+
+    def test_single_non_additive_metric_value_is_reported(
+        self, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            columns=[ColumnMeta(name="customer_count", data_type="int")],
+            rows=[[344]],
+        )
+        intent = _intent(QuestionType.AGGREGATION, measures=["customer_count"])
+        plan = QueryPlan(
+            intent_question_type="aggregation",
+            original_question="How many purchasing customers are there?",
+            dialect=SQLDialect.SQLITE,
+            primary_table=ResolvedTable(table_name="orders"),
+            measures=[
+                ResolvedMeasure(
+                    name="customer_count",
+                    sql_expression="COUNT(DISTINCT orders.customer_id)",
+                    output_alias="customer_count",
+                    additivity="non_additive",
+                )
+            ],
+        )
+
+        analysed = analyser.analyse(result, intent, plan)
+
+        assert analysed.key_finding == "customer_count: 344.00"
+        assert analysed.narrative_insight == "Total customer_count was 344.00."
 
     def test_declared_measure_wins_over_column_order(self, analyser: ResultAnalyser) -> None:
         # `id` still comes first, but intent.measures names `revenue` --

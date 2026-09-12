@@ -38,6 +38,12 @@ class SCLManager:
         self._table_index: dict[str, TableDefinition] = {t.name: t for t in scl.tables}
         self._metric_index = self._build_metric_index(scl.metrics)
         self._glossary_index = self._build_glossary_index(scl.glossary)
+        self._analysis_profile_index = {
+            profile.name.lower(): profile for profile in scl.analysis_profiles
+        }
+        for profile in scl.analysis_profiles:
+            for alias in profile.aliases:
+                self._analysis_profile_index[alias.lower()] = profile
         self._allowed_tables: frozenset[str] = frozenset(scl.get_allowed_tables())
 
         logger.info(
@@ -70,6 +76,16 @@ class SCLManager:
     def resolve_glossary_term(self, term: str) -> GlossaryTerm | None:
         """Case-insensitive lookup of a glossary term by term text or alias."""
         return self._glossary_index.get(term.lower())
+
+    def match_analysis_profile(self, question: str):
+        """Return the most specific governed profile whose alias occurs in the question."""
+        lowered = question.lower()
+        matches = [
+            (alias, profile)
+            for alias, profile in self._analysis_profile_index.items()
+            if alias in lowered
+        ]
+        return max(matches, key=lambda item: len(item[0]))[1] if matches else None
 
     def get_join_path(self, from_table: str, to_table: str) -> JoinDefinition | None:
         """

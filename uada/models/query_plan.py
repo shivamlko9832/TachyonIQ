@@ -45,10 +45,11 @@ class AggregationFunction(str, Enum):
 
 class SQLDialect(str, Enum):
     """Supported SQL dialects. Maps to SQLGlot dialect names."""
+
     POSTGRESQL = "postgres"
     MYSQL = "mysql"
     SQLITE = "sqlite"
-    TSQL = "tsql"        # SQL Server
+    TSQL = "tsql"  # SQL Server
     DUCKDB = "duckdb"
     SNOWFLAKE = "snowflake"
     BIGQUERY = "bigquery"
@@ -93,6 +94,10 @@ class ResolvedMeasure(BaseModel):
     aggregation: AggregationFunction | None = None
     output_alias: str = Field(description="The column alias in the SELECT clause.")
     unit: str | None = None
+    additivity: str = Field(
+        default="additive",
+        description="Whether grouped values may be safely rolled up by summing them.",
+    )
 
 
 class ResolvedDimension(BaseModel):
@@ -178,9 +183,7 @@ class QueryPlan(BaseModel):
     intent_question_type: str = Field(
         description="The QuestionType from the originating AnalyticalIntent."
     )
-    original_question: str = Field(
-        description="The original user question, for tracing."
-    )
+    original_question: str = Field(description="The original user question, for tracing.")
     dialect: SQLDialect = Field(
         description="Target SQL dialect. Determines which SQL syntax the generator produces."
     )
@@ -244,6 +247,13 @@ class QueryPlan(BaseModel):
         description="Planner's estimate: 'simple', 'moderate', 'complex'. "
         "Used to guide SQL Generator prompt selection.",
     )
+    analysis_operations: list[str] = Field(
+        default_factory=list,
+        description="Deterministic statistical operations to run after query execution.",
+    )
+    forecast_horizon: int | None = None
+    confidence_level: float = 0.95
+    analysis_profile: str | None = None
 
     def to_generator_context(self) -> dict[str, Any]:
         """
@@ -254,8 +264,7 @@ class QueryPlan(BaseModel):
             "dialect": self.dialect.value,
             "primary_table": self.primary_table.table_name,
             "joins": [
-                f"{j.join_type.value} JOIN {j.to_table} ON {j.condition}"
-                for j in self.joins
+                f"{j.join_type.value} JOIN {j.to_table} ON {j.condition}" for j in self.joins
             ],
             "select": (
                 [m.sql_expression + f" AS {m.output_alias}" for m in self.measures]
@@ -263,10 +272,19 @@ class QueryPlan(BaseModel):
             ),
             "time_filter": self.time_resolution.filter_sql if self.time_resolution else None,
             "time_group_by": self.time_resolution.group_by_sql if self.time_resolution else None,
+            "comparison_filter": (
+                self.time_resolution.comparison_filter_sql if self.time_resolution else None
+            ),
+            "comparison_label": (
+                self.time_resolution.comparison_label if self.time_resolution else None
+            ),
+            "is_comparison": self.is_comparison,
             "where": [f.sql_fragment for f in self.filters],
-            "order_by": [
-                f"{o.sql_expression} {o.direction}" for o in self.order_by
-            ],
+            "order_by": [f"{o.sql_expression} {o.direction}" for o in self.order_by],
             "limit": self.limit,
             "notes": self.plan_notes,
+            "analysis_operations": self.analysis_operations,
+            "forecast_horizon": self.forecast_horizon,
+            "confidence_level": self.confidence_level,
+            "analysis_profile": self.analysis_profile,
         }

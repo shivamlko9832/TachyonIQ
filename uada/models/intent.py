@@ -70,7 +70,33 @@ class QuestionType(str, Enum):
     """Question is unclear. Triggers a clarification request to the user."""
 
 
+class AnalysisOperation(str, Enum):
+    """Deterministic analytical work requested after the governed query executes.
+
+    These values are deliberately separate from ``QuestionType``.  A question can
+    have one query shape (for example, a monthly time series) and request several
+    analytical operations (trend, anomaly detection, and forecasting).  Keeping
+    that distinction explicit prevents UI phrases from selecting an ad-hoc
+    response builder.
+    """
+
+    DESCRIPTIVE = "descriptive"
+    COMPARISON = "comparison"
+    TREND = "trend"
+    DISTRIBUTION = "distribution"
+    CORRELATION = "correlation"
+    REGRESSION = "regression"
+    ANOMALY = "anomaly"
+    FORECAST = "forecast"
+    CONTRIBUTION = "contribution"
+    DRIVER_ANALYSIS = "driver_analysis"
+    EXECUTIVE_SUMMARY = "executive_summary"
+
+
 class TimeRangeType(str, Enum):
+    ALL = "all"
+    """Use the full available history while still allowing a time bucket."""
+
     RELATIVE = "relative"
     """Relative to current date/time. "last quarter", "last 12 months"."""
 
@@ -97,7 +123,7 @@ class RelativePeriod(str, Enum):
     LAST_90_DAYS = "last_90_days"
     LAST_12_MONTHS = "last_12_months"
     LAST_N_MONTHS = "last_n_months"  # requires period_count
-    LAST_N_DAYS = "last_n_days"      # requires period_count
+    LAST_N_DAYS = "last_n_days"  # requires period_count
 
 
 class TimeBucket(str, Enum):
@@ -161,6 +187,30 @@ class TimeRange(BaseModel):
         if self.range_type == TimeRangeType.ABSOLUTE:
             if self.start_date is None or self.end_date is None:
                 raise ValueError("start_date and end_date required when range_type is ABSOLUTE")
+            from datetime import date, datetime
+
+            def _parse_boundary(value: str) -> datetime:
+                try:
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    try:
+                        return datetime.combine(date.fromisoformat(value), datetime.min.time())
+                    except ValueError as exc:
+                        raise ValueError(
+                            "Absolute time boundaries must be ISO-8601 dates or timestamps"
+                        ) from exc
+
+            start = _parse_boundary(self.start_date)
+            end = _parse_boundary(self.end_date)
+            if (start.tzinfo is None) != (end.tzinfo is None):
+                from datetime import UTC
+
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=UTC)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=UTC)
+            if end <= start:
+                raise ValueError("end_date must be later than start_date")
         return self
 
 
@@ -171,6 +221,14 @@ class TimeComparison(BaseModel):
     period_count: int | None = None
     comparison_label: str = Field(
         description="Human-readable label for the comparison period, e.g. 'Last Year'."
+    )
+    comparison_start_date: str | None = Field(
+        default=None,
+        description="Optional absolute comparison start boundary for explicit windows.",
+    )
+    comparison_end_date: str | None = Field(
+        default=None,
+        description="Optional absolute comparison end boundary for explicit windows.",
     )
 
 
@@ -205,9 +263,7 @@ class OrderClause(BaseModel):
 class Ambiguity(BaseModel):
     """Records a detected ambiguity and how it was resolved (or not)."""
 
-    description: str = Field(
-        description="Human-readable description of the ambiguity."
-    )
+    description: str = Field(description="Human-readable description of the ambiguity.")
     resolution: str | None = Field(
         default=None,
         description="How the ambiguity was resolved, if at all. "
@@ -315,6 +371,26 @@ class AnalyticalIntent(BaseModel):
         description="If confidence is low, the question to ask the user for clarification.",
     )
 
+    # ── Deterministic analytical work ────────────────────────────────────────
+    analysis_operations: list[AnalysisOperation] = Field(
+        default_factory=list,
+        description="Statistical operations to execute over the validated query result.",
+    )
+    forecast_horizon: int | None = Field(
+        default=None,
+        ge=1,
+        le=120,
+        description="Number of time buckets to forecast when FORECAST is requested.",
+    )
+    confidence_level: Annotated[float, Field(gt=0.5, lt=1.0)] = Field(
+        default=0.95,
+        description="Confidence level for intervals and inferential tests.",
+    )
+    analysis_profile: str | None = Field(
+        default=None,
+        description="Optional governed semantic analysis profile selected for the question.",
+    )
+
     # ── Raw input (for tracing) ───────────────────────────────────────────────
     raw_question: str = Field(
         description="The original user question, preserved for tracing and evaluation."
@@ -326,9 +402,7 @@ class AnalyticalIntent(BaseModel):
         # OUT_OF_SCOPE and AMBIGUOUS should not have measures
         if self.question_type in (QuestionType.OUT_OF_SCOPE, QuestionType.AMBIGUOUS):
             if self.measures:
-                raise ValueError(
-                    f"question_type={self.question_type} should not have measures."
-                )
+                raise ValueError(f"question_type={self.question_type} should not have measures.")
 
         # RANKING should have order_by
         if self.question_type == QuestionType.RANKING and self.order_by is None:
@@ -348,8 +422,9 @@ class AnalyticalIntent(BaseModel):
         # TIME_SERIES requires a bucket
         if self.question_type == QuestionType.TIME_SERIES:
             if self.time_range is None or self.time_range.bucket is None:
-                raise ValueError(
-                    "TIME_SERIES question_type requires time_range with a bucket."
-                )
+                raise ValueError("TIME_SERIES question_type requires time_range with a bucket.")
+
+        if AnalysisOperation.FORECAST in self.analysis_operations and self.forecast_horizon is None:
+            raise ValueError("FORECAST analysis operation requires forecast_horizon.")
 
         return self

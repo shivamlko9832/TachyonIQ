@@ -29,6 +29,7 @@ from uada.models.result import (
 
 if TYPE_CHECKING:
     from uada.models.intent import AnalyticalIntent
+    from uada.models.query_plan import QueryPlan
     from uada.models.result import QueryResult
 
 logger = logging.getLogger(__name__)
@@ -43,9 +44,19 @@ _OUTLIER_Z_SCORE_THRESHOLD = 3.0
 class ResultAnalyser:
     """Pipeline step 8: QueryResult -> AnalysedResult. Pure Pandas, no LLM."""
 
-    def analyse(self, result: QueryResult, intent: AnalyticalIntent) -> AnalysedResult:
+    def analyse(
+        self,
+        result: QueryResult,
+        intent: AnalyticalIntent,
+        plan: QueryPlan | None = None,
+    ) -> AnalysedResult:
         """Post-process `result` into statistical summaries and a narrative."""
         df = pd.DataFrame(result.rows, columns=result.column_names)
+        non_additive_measures = {
+            measure.output_alias.lower()
+            for measure in (plan.measures if plan is not None else [])
+            if measure.additivity == "non_additive"
+        }
 
         numeric_columns = self._numeric_columns(result, df)
         numeric_summaries = [self._summarize_column(df, col) for col in numeric_columns]
@@ -61,8 +72,12 @@ class ResultAnalyser:
 
         outliers = self._detect_outliers(df, numeric_columns)
 
-        narrative_insight = self._build_narrative(intent, df, numeric_summaries, trend_analysis)
-        key_finding = self._build_key_finding(intent, df, numeric_summaries, trend_analysis)
+        narrative_insight = self._build_narrative(
+            intent, df, numeric_summaries, trend_analysis, non_additive_measures
+        )
+        key_finding = self._build_key_finding(
+            intent, df, numeric_summaries, trend_analysis, non_additive_measures
+        )
 
         # DuckDB OLAP enrichment (P2-4) — best-effort, never blocks the response
         olap_insights: OlapInsights | None = None
@@ -89,7 +104,12 @@ class ResultAnalyser:
 
         # Richer deterministic narration (P2-2 — bullets, drivers, anomaly descriptions)
         key_findings_bullets = self._build_findings_bullets(
-            intent, df, numeric_summaries, trend_analysis, outliers
+            intent,
+            df,
+            numeric_summaries,
+            trend_analysis,
+            outliers,
+            non_additive_measures,
         )
         drivers = self._build_drivers(intent, df, numeric_summaries, trend_analysis)
         anomaly_descriptions = [o.description for o in outliers[:5]]
@@ -193,8 +213,18 @@ class ResultAnalyser:
         # change_pct kept for display/narrative (note, downstream text); not used for direction
         change_pct = ((last - first) / abs(first) * 100) if first != 0 else None
 
-        # B-03 fix: Mann-Kendall monotonic trend test replaces first-vs-last heuristic
-        direction = self._mann_kendall_direction(series)
+        # Preserve a useful directional classification for short demo and
+        # operational series.  A three-point monotonic series cannot produce
+        # a conventional p<.05 Mann-Kendall result, but calling it volatile
+        # would contradict the observed shape.  Infer direction first when
+        # every step agrees; use the statistical test for noisier series.
+        deltas = series.diff().dropna()
+        if bool((deltas > 0).all()) and (change_pct is None or change_pct >= _TREND_INCREASE_THRESHOLD_PCT):
+            direction = TrendDirection.INCREASING
+        elif bool((deltas < 0).all()) and (change_pct is None or change_pct <= _TREND_DECREASE_THRESHOLD_PCT):
+            direction = TrendDirection.DECREASING
+        else:
+            direction = self._mann_kendall_direction(series)
 
         note = None
         if change_pct is not None:
@@ -237,8 +267,12 @@ class ResultAnalyser:
         except ImportError:
             logger.debug("scipy not available; Mann-Kendall skipped for %s", series.name)
 
-        # Not significant (or scipy absent) — use volatility check
-        return TrendDirection.VOLATILE if self._is_volatile(series) else TrendDirection.STABLE
+        # Not significant (or scipy absent) — use volatility check.  A large
+        # swing is volatile only when the direction changes; a smooth but
+        # statistically underpowered sequence is stable.
+        deltas = series.diff().dropna()
+        sign_changes = bool((deltas > 0).any() and (deltas < 0).any())
+        return TrendDirection.VOLATILE if sign_changes and self._is_volatile(series) else TrendDirection.STABLE
 
     def _is_volatile(self, series: pd.Series) -> bool:
         """
@@ -291,9 +325,12 @@ class ResultAnalyser:
         df: pd.DataFrame,
         numeric_summaries: list[NumericSummary],
         trend_analysis: list[TrendAnalysis],
+        non_additive_measures: set[str],
     ) -> str | None:
         if intent.question_type == QuestionType.AGGREGATION:
-            return self._aggregation_narrative(intent, numeric_summaries)
+            return self._aggregation_narrative(
+                intent, df, numeric_summaries, non_additive_measures
+            )
         if intent.question_type == QuestionType.TIME_SERIES:
             return self._time_series_narrative(intent, trend_analysis)
         if intent.question_type == QuestionType.RANKING:
@@ -301,7 +338,11 @@ class ResultAnalyser:
         return None
 
     def _aggregation_narrative(
-        self, intent: AnalyticalIntent, numeric_summaries: list[NumericSummary]
+        self,
+        intent: AnalyticalIntent,
+        df: pd.DataFrame,
+        numeric_summaries: list[NumericSummary],
+        non_additive_measures: set[str],
     ) -> str | None:
         if not intent.measures or not numeric_summaries:
             return None
@@ -311,6 +352,11 @@ class ResultAnalyser:
         )
         if summary.sum is None:
             return None
+        if summary.column.lower() in non_additive_measures and len(df) > 1:
+            return (
+                f"Returned {len(df)} groups for {measure_name}. Group values are not "
+                "additive because the same entity can appear in more than one group."
+            )
         return f"Total {measure_name} was {_format_number(summary.sum)}."
 
     def _time_series_narrative(
@@ -343,6 +389,7 @@ class ResultAnalyser:
         df: pd.DataFrame,
         numeric_summaries: list[NumericSummary],
         trend_analysis: list[TrendAnalysis],
+        non_additive_measures: set[str],
     ) -> str | None:
         if intent.question_type == QuestionType.TIME_SERIES and trend_analysis:
             trend = trend_analysis[0]
@@ -360,6 +407,8 @@ class ResultAnalyser:
                 return f"{top_row[dimension]}: {_format_number(float(top_row[measure]))}"
         summary = self._select_fallback_summary(intent, numeric_summaries)
         if summary is not None and summary.sum is not None:
+            if summary.column.lower() in non_additive_measures and len(df) > 1:
+                return None
             return f"{summary.column}: {_format_number(summary.sum)}"  # type: ignore[arg-type]
         return None
 
@@ -496,6 +545,7 @@ class ResultAnalyser:
         numeric_summaries: list[NumericSummary],
         trend_analysis: list[TrendAnalysis],
         outliers: list[Outlier],
+        non_additive_measures: set[str],
     ) -> list[str]:
         """Generate 3-5 factual bullet points from statistical summaries."""
         bullets: list[str] = []
@@ -503,6 +553,13 @@ class ResultAnalyser:
         # Primary metric summary
         for summary in numeric_summaries[:2]:
             if summary.sum is not None:
+                if summary.column.lower() in non_additive_measures and len(df) > 1:
+                    bullets.append(
+                        f"{summary.column.replace('_', ' ').title()}: values span "
+                        f"{_format_number(summary.min or 0)}–{_format_number(summary.max or 0)} "
+                        "across groups and must not be summed."
+                    )
+                    continue
                 bullets.append(
                     f"{summary.column.replace('_', ' ').title()}: "
                     f"total {_format_number(summary.sum)}, "

@@ -164,8 +164,7 @@ def _sqlite_period_filter(column: str, period: RelativePeriod, count: int | None
     week_start = "date('now', '-' || ((strftime('%w','now') + 6) % 7) || ' days')"
     last_week_start = "date('now', '-' || ((strftime('%w','now') + 6) % 7 + 7) || ' days')"
     quarter_start = (
-        "date(date('now','start of month'), "
-        "'-' || ((strftime('%m','now') - 1) % 3) || ' months')"
+        "date(date('now','start of month'), '-' || ((strftime('%m','now') - 1) % 3) || ' months')"
     )
 
     templates: dict[RelativePeriod, str] = {
@@ -175,9 +174,7 @@ def _sqlite_period_filter(column: str, period: RelativePeriod, count: int | None
             f"AND {column} < date('now', 'start of day')"
         ),
         RelativePeriod.THIS_WEEK: f"{column} >= {week_start}",
-        RelativePeriod.LAST_WEEK: (
-            f"{column} >= {last_week_start} AND {column} < {week_start}"
-        ),
+        RelativePeriod.LAST_WEEK: (f"{column} >= {last_week_start} AND {column} < {week_start}"),
         RelativePeriod.THIS_MONTH: f"{column} >= date('now', 'start of month')",
         RelativePeriod.LAST_MONTH: (
             f"{column} >= date('now', 'start of month', '-1 month') "
@@ -213,9 +210,7 @@ def _tsql_period_filter(column: str, period: RelativePeriod, count: int | None) 
 
     templates: dict[RelativePeriod, str] = {
         RelativePeriod.TODAY: f"{column} >= {today}",
-        RelativePeriod.YESTERDAY: (
-            f"{column} >= DATEADD(day, -1, {today}) AND {column} < {today}"
-        ),
+        RelativePeriod.YESTERDAY: (f"{column} >= DATEADD(day, -1, {today}) AND {column} < {today}"),
         RelativePeriod.THIS_WEEK: f"{column} >= {week_start}",
         RelativePeriod.LAST_WEEK: (
             f"{column} >= DATEADD(week, -1, {week_start}) AND {column} < {week_start}"
@@ -238,7 +233,6 @@ def _tsql_period_filter(column: str, period: RelativePeriod, count: int | None) 
         RelativePeriod.LAST_12_MONTHS: f"{column} >= DATEADD(month, -12, GETDATE())",
     }
     return templates[period]
-
 
 
 def _duckdb_period_filter(column: str, period: RelativePeriod, count: int | None) -> str:
@@ -298,28 +292,23 @@ def _snowflake_period_filter(column: str, period: RelativePeriod, count: int | N
     templates: dict[RelativePeriod, str] = {
         RelativePeriod.TODAY: f"{column} >= CURRENT_DATE()",
         RelativePeriod.YESTERDAY: (
-            f"{column} >= DATEADD(day, -1, CURRENT_DATE()) "
-            f"AND {column} < CURRENT_DATE()"
+            f"{column} >= DATEADD(day, -1, CURRENT_DATE()) AND {column} < CURRENT_DATE()"
         ),
         RelativePeriod.THIS_WEEK: f"{column} >= {week_start}",
         RelativePeriod.LAST_WEEK: (
-            f"{column} >= DATEADD(week, -1, {week_start}) "
-            f"AND {column} < {week_start}"
+            f"{column} >= DATEADD(week, -1, {week_start}) AND {column} < {week_start}"
         ),
         RelativePeriod.THIS_MONTH: f"{column} >= {month_start}",
         RelativePeriod.LAST_MONTH: (
-            f"{column} >= DATEADD(month, -1, {month_start}) "
-            f"AND {column} < {month_start}"
+            f"{column} >= DATEADD(month, -1, {month_start}) AND {column} < {month_start}"
         ),
         RelativePeriod.THIS_QUARTER: f"{column} >= {quarter_start}",
         RelativePeriod.LAST_QUARTER: (
-            f"{column} >= DATEADD(month, -3, {quarter_start}) "
-            f"AND {column} < {quarter_start}"
+            f"{column} >= DATEADD(month, -3, {quarter_start}) AND {column} < {quarter_start}"
         ),
         RelativePeriod.THIS_YEAR: f"{column} >= {year_start}",
         RelativePeriod.LAST_YEAR: (
-            f"{column} >= DATEADD(year, -1, {year_start}) "
-            f"AND {column} < {year_start}"
+            f"{column} >= DATEADD(year, -1, {year_start}) AND {column} < {year_start}"
         ),
         RelativePeriod.LAST_7_DAYS: f"{column} >= DATEADD(day, -7, CURRENT_TIMESTAMP())",
         RelativePeriod.LAST_30_DAYS: f"{column} >= DATEADD(day, -30, CURRENT_TIMESTAMP())",
@@ -342,49 +331,32 @@ def _bigquery_period_filter(column: str, period: RelativePeriod, count: int | No
     templates: dict[RelativePeriod, str] = {
         RelativePeriod.TODAY: f"{column} >= CURRENT_DATE()",
         RelativePeriod.YESTERDAY: (
-            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) "
-            f"AND {column} < CURRENT_DATE()"
+            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) AND {column} < CURRENT_DATE()"
         ),
-        RelativePeriod.THIS_WEEK: (
-            f"{column} >= DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY))"
-        ),
+        RelativePeriod.THIS_WEEK: (f"{column} >= DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY))"),
         RelativePeriod.LAST_WEEK: (
             f"{column} >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY)), INTERVAL 1 WEEK) "
             f"AND {column} < DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY))"
         ),
-        RelativePeriod.THIS_MONTH: (
-            f"{column} >= DATE_TRUNC(CURRENT_DATE(), MONTH)"
-        ),
+        RelativePeriod.THIS_MONTH: (f"{column} >= DATE_TRUNC(CURRENT_DATE(), MONTH)"),
         RelativePeriod.LAST_MONTH: (
             f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH) "
             f"AND {column} < DATE_TRUNC(CURRENT_DATE(), MONTH)"
         ),
-        RelativePeriod.THIS_QUARTER: (
-            f"{column} >= DATE_TRUNC(CURRENT_DATE(), QUARTER)"
-        ),
+        RelativePeriod.THIS_QUARTER: (f"{column} >= DATE_TRUNC(CURRENT_DATE(), QUARTER)"),
         RelativePeriod.LAST_QUARTER: (
             f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 QUARTER), QUARTER) "
             f"AND {column} < DATE_TRUNC(CURRENT_DATE(), QUARTER)"
         ),
-        RelativePeriod.THIS_YEAR: (
-            f"{column} >= DATE_TRUNC(CURRENT_DATE(), YEAR)"
-        ),
+        RelativePeriod.THIS_YEAR: (f"{column} >= DATE_TRUNC(CURRENT_DATE(), YEAR)"),
         RelativePeriod.LAST_YEAR: (
             f"{column} >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR), YEAR) "
             f"AND {column} < DATE_TRUNC(CURRENT_DATE(), YEAR)"
         ),
-        RelativePeriod.LAST_7_DAYS: (
-            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
-        ),
-        RelativePeriod.LAST_30_DAYS: (
-            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"
-        ),
-        RelativePeriod.LAST_90_DAYS: (
-            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)"
-        ),
-        RelativePeriod.LAST_12_MONTHS: (
-            f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)"
-        ),
+        RelativePeriod.LAST_7_DAYS: (f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"),
+        RelativePeriod.LAST_30_DAYS: (f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"),
+        RelativePeriod.LAST_90_DAYS: (f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)"),
+        RelativePeriod.LAST_12_MONTHS: (f"{column} >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)"),
     }
     return templates[period]
 
@@ -448,8 +420,6 @@ def _tsql_bucket(column: str, bucket: TimeBucket) -> str:
     return f"{formats[bucket]} AS period"
 
 
-
-
 def _duckdb_bucket(column: str, bucket: TimeBucket) -> str:
     # DuckDB DATE_TRUNC uses the same unit strings as PostgreSQL.
     return f"DATE_TRUNC('{bucket.value}', {column}) AS period"
@@ -465,7 +435,7 @@ def _bigquery_bucket(column: str, bucket: TimeBucket) -> str:
     # BigQuery DATE_TRUNC(date_expr, granularity) — granularity is an unquoted keyword.
     # WEEK → WEEK(MONDAY) for ISO-week alignment.
     bq_unit: dict[TimeBucket, str] = {
-        TimeBucket.HOUR: "HOUR",      # requires TIMESTAMP_TRUNC for TIMESTAMP cols
+        TimeBucket.HOUR: "HOUR",  # requires TIMESTAMP_TRUNC for TIMESTAMP cols
         TimeBucket.DAY: "DAY",
         TimeBucket.WEEK: "WEEK(MONDAY)",
         TimeBucket.MONTH: "MONTH",
@@ -478,6 +448,7 @@ def _bigquery_bucket(column: str, bucket: TimeBucket) -> str:
         # We emit TIMESTAMP_TRUNC as the safer choice for analytics columns.
         return f"TIMESTAMP_TRUNC({column}, {unit}) AS period"
     return f"DATE_TRUNC({column}, {unit}) AS period"
+
 
 _BUCKET_FUNCS = {
     SQLDialect.POSTGRESQL: _postgres_bucket,
@@ -493,16 +464,30 @@ _BUCKET_FUNCS = {
 class QueryPlanner:
     """Pipeline step 4: AnalyticalIntent -> QueryPlan. Pure deterministic logic."""
 
-    def __init__(self, scl_manager: SCLManager) -> None:
+    def __init__(self, scl_manager: SCLManager, *, strict_semantics: bool = False) -> None:
         self._scl_manager = scl_manager
+        self._strict_semantics = strict_semantics
 
     def plan(self, intent: AnalyticalIntent, schema_context: SchemaContext) -> QueryPlan:
         """Resolve `intent` into a fully self-contained QueryPlan."""
         dialect = self._resolve_dialect(schema_context.dialect)
 
         measures = [self._resolve_measure(name, schema_context) for name in intent.measures]
+        primary_measure_table = next(
+            (
+                table
+                for measure in measures
+                if (table := _first_table_reference(measure.sql_expression)) is not None
+            ),
+            None,
+        )
         dimensions = [
-            self._resolve_dimension(name, schema_context) for name in intent.dimensions
+            self._resolve_dimension(
+                name,
+                schema_context,
+                preferred_table=primary_measure_table,
+            )
+            for name in intent.dimensions
         ]
 
         primary_table_name = self._resolve_primary_table(measures, dimensions, schema_context)
@@ -510,6 +495,52 @@ class QueryPlanner:
         filters = [
             self._resolve_filter(f, primary_table_name, schema_context) for f in intent.filters
         ]
+
+        # Metric definitions may encode business rules that must hold every
+        # time the metric is used (for example, revenue excludes cancelled
+        # orders). Carry those predicates into the plan instead of leaving the
+        # SQL generator to rediscover them from prose.
+        existing_fragments = {f.sql_fragment for f in filters}
+        for requested_name in intent.measures:
+            metric = self._scl_manager.resolve_metric(requested_name)
+            if metric is None or not metric.filters:
+                continue
+            if metric.filters in existing_fragments:
+                continue
+            filters.append(
+                ResolvedFilter(
+                    sql_fragment=metric.filters,
+                    original_semantic_filter=f"metric:{metric.name}",
+                )
+            )
+            existing_fragments.add(metric.filters)
+
+        # Carry configured row policies into the typed plan as well. The SQL
+        # validator re-applies them at the execution boundary, while keeping
+        # them here makes the policy visible in traces and prevents the
+        # replanner from treating them as optional user filters.
+        referenced_tables = {primary_table_name.lower()}
+        for measure in measures:
+            table = _first_table_reference(measure.sql_expression)
+            if table:
+                referenced_tables.add(table.lower())
+        for dimension in dimensions:
+            table = _first_table_reference(dimension.sql_expression)
+            if table:
+                referenced_tables.add(table.lower())
+        for filt in filters:
+            referenced_tables.update(
+                table.lower() for table in _TABLE_COLUMN_PATTERN.findall(filt.sql_fragment)
+            )
+        for table, predicate in self._scl_manager.scl.security.row_filters.items():
+            if table.lower() in referenced_tables and predicate not in existing_fragments:
+                filters.append(
+                    ResolvedFilter(
+                        sql_fragment=predicate,
+                        original_semantic_filter=f"policy:{table}",
+                    )
+                )
+                existing_fragments.add(predicate)
 
         additional_tables, joins = self._resolve_joins(
             primary_table_name, measures, dimensions, filters
@@ -527,7 +558,11 @@ class QueryPlanner:
                     time_column if "." in time_column else f"{primary_table_name}.{time_column}"
                 )
                 time_resolution = self._resolve_time(
-                    intent.time_range, qualified_column, dialect, intent.time_comparison
+                    intent.time_range,
+                    qualified_column,
+                    dialect,
+                    intent.time_comparison,
+                    fiscal_year_start_month=schema_context.fiscal_year_start_month,
                 )
 
         order_by = [
@@ -560,6 +595,10 @@ class QueryPlanner:
             is_follow_up=intent.references_prior_turn,
             base_plan_summary=intent.follow_up_description,
             estimated_complexity=self._estimate_complexity(joins, time_resolution, is_comparison),
+            analysis_operations=[operation.value for operation in intent.analysis_operations],
+            forecast_horizon=intent.forecast_horizon,
+            confidence_level=intent.confidence_level,
+            analysis_profile=intent.analysis_profile,
         )
         logger.info(
             "Query planned: dialect=%s, primary_table=%s, %d measure(s), %d dimension(s), "
@@ -624,6 +663,11 @@ class QueryPlanner:
             for column in table.columns:
                 if column.is_default_time_column:
                     return column.column_name
+        semantic_table = self._scl_manager.get_table(primary_table)
+        if semantic_table is not None:
+            for column in semantic_table.columns:
+                if column.default_time_column:
+                    return column.name
         for table in schema_context.tables:
             for column in table.columns:
                 if column.is_default_time_column:
@@ -640,7 +684,11 @@ class QueryPlanner:
                 sql_expression=metric.formula,
                 output_alias=metric.name,
                 unit=metric.unit,
+                additivity=metric.additivity.value,
             )
+
+        if self._strict_semantics:
+            raise ValueError(f"Measure '{name}' is not defined in the Semantic Context Layer.")
 
         fallback_table = schema_context.tables[0].table_name if schema_context.tables else name
         logger.warning(
@@ -657,8 +705,34 @@ class QueryPlanner:
 
     # ── Dimensions ───────────────────────────────────────────────────────────
 
-    def _resolve_dimension(self, name: str, schema_context: SchemaContext) -> ResolvedDimension:
-        for table in schema_context.tables:
+    def _resolve_dimension(
+        self,
+        name: str,
+        schema_context: SchemaContext,
+        *,
+        preferred_table: str | None = None,
+    ) -> ResolvedDimension:
+        """Resolve a dimension to the closest governed table.
+
+        Duplicate names such as ``region`` occur in several facts. Prefer the
+        measure's own table, then a table directly joinable to it. This avoids
+        choosing an unrelated table simply because retrieval happened to rank
+        it first.
+        """
+        def table_priority(table_name: str) -> int:
+            if table_name == preferred_table:
+                return 0
+            if preferred_table and self._scl_manager.get_join_path(
+                preferred_table, table_name
+            ) is not None:
+                return 1
+            return 2
+
+        ordered_tables = sorted(
+            schema_context.tables,
+            key=lambda table: table_priority(table.table_name),
+        )
+        for table in ordered_tables:
             for column in table.columns:
                 if column.column_name == name:
                     return ResolvedDimension(
@@ -666,6 +740,23 @@ class QueryPlanner:
                         sql_expression=f"{table.table_name}.{column.column_name}",
                         output_alias=name,
                     )
+        # Retrieval is intentionally narrow, but a governed analysis profile
+        # may select a table that was not among the top retrieved documents.
+        # Resolve that table from the full security-filtered semantic contract.
+        semantic_tables = sorted(
+            self._scl_manager.scl.included_tables,
+            key=lambda table: table_priority(table.name),
+        )
+        for table in semantic_tables:
+            for column in table.included_columns:
+                if column.name == name:
+                    return ResolvedDimension(
+                        name=name,
+                        sql_expression=f"{table.name}.{column.name}",
+                        output_alias=name,
+                    )
+        if self._strict_semantics:
+            raise ValueError(f"Dimension '{name}' is not present in the linked schema context.")
         fallback_table = schema_context.tables[0].table_name if schema_context.tables else name
         logger.warning(
             "Dimension '%s' not found in any retrieved table; falling back to %s.%s.",
@@ -728,12 +819,10 @@ class QueryPlanner:
         for other_table in sorted(referenced_tables):
             join_def = self._scl_manager.get_join_path(primary_table, other_table)
             if join_def is None:
-                logger.warning(
-                    "No SCL join path between '%s' and '%s'; table referenced without a join.",
-                    primary_table,
-                    other_table,
+                raise ValueError(
+                    "The semantic contract has no governed join between "
+                    f"'{primary_table}' and '{other_table}'."
                 )
-                continue
             additional_tables.append(ResolvedTable(table_name=other_table))
             joins.append(
                 ResolvedJoin(
@@ -753,6 +842,7 @@ class QueryPlanner:
         column: str,
         dialect: SQLDialect,
         time_comparison: TimeComparison | None = None,
+        fiscal_year_start_month: int = 1,
     ) -> TimeResolution:
         """Resolve a TimeRange (and optional TimeComparison) into dialect-specific SQL."""
         filter_sql: str | None = None
@@ -765,8 +855,13 @@ class QueryPlanner:
             filter_sql = (
                 f"{column} >= '{time_range.start_date}' AND {column} < '{time_range.end_date}'"
             )
-        else:
-            logger.warning("TimeRangeType.FISCAL is not yet supported; skipping time filter.")
+        elif time_range.range_type == TimeRangeType.FISCAL:
+            filter_sql = self._fiscal_period_filter(
+                dialect,
+                column,
+                time_range.relative_period or RelativePeriod.LAST_YEAR,
+                fiscal_year_start_month,
+            )
 
         group_by_sql = None
         if time_range.bucket is not None:
@@ -775,9 +870,18 @@ class QueryPlanner:
         comparison_filter_sql = None
         comparison_label = None
         if time_comparison is not None:
-            comparison_filter_sql = self._period_filter(
-                dialect, column, time_comparison.comparison_period, time_comparison.period_count
-            )
+            if time_comparison.comparison_start_date and time_comparison.comparison_end_date:
+                comparison_filter_sql = (
+                    f"{column} >= '{time_comparison.comparison_start_date}' "
+                    f"AND {column} < '{time_comparison.comparison_end_date}'"
+                )
+            else:
+                comparison_filter_sql = self._period_filter(
+                    dialect,
+                    column,
+                    time_comparison.comparison_period,
+                    time_comparison.period_count,
+                )
             comparison_label = time_comparison.comparison_label
 
         return TimeResolution(
@@ -788,6 +892,47 @@ class QueryPlanner:
             comparison_filter_sql=comparison_filter_sql,
             comparison_label=comparison_label,
         )
+
+    def _fiscal_period_filter(
+        self,
+        dialect: SQLDialect,
+        column: str,
+        period: RelativePeriod,
+        start_month: int,
+    ) -> str:
+        """Resolve fiscal year windows without silently dropping the filter."""
+        if not 1 <= start_month <= 12:
+            raise ValueError("Fiscal year start month must be between 1 and 12.")
+        if dialect == SQLDialect.SQLITE:
+            current_start = (
+                "date(printf('%04d-%02d-01', "
+                f"CAST(strftime('%Y','now') AS INTEGER) - "
+                "CASE WHEN CAST(strftime('%m','now') AS INTEGER) "
+                f"< {start_month} THEN 1 ELSE 0 END, "
+                f"{start_month}))"
+            )
+            if period in (RelativePeriod.THIS_YEAR, RelativePeriod.TODAY):
+                return f"{column} >= {current_start}"
+            if period == RelativePeriod.LAST_YEAR:
+                return (
+                    f"{column} >= date({current_start}, '-1 year') AND {column} < {current_start}"
+                )
+        elif dialect == SQLDialect.POSTGRESQL:
+            current_start = (
+                "make_date("
+                f"EXTRACT(YEAR FROM CURRENT_DATE)::int - "
+                "CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE)::int "
+                f"< {start_month} THEN 1 ELSE 0 END, "
+                f"{start_month}, 1)"
+            )
+            if period in (RelativePeriod.THIS_YEAR, RelativePeriod.TODAY):
+                return f"{column} >= {current_start}"
+            if period == RelativePeriod.LAST_YEAR:
+                return (
+                    f"{column} >= ({current_start} - INTERVAL '1 year') "
+                    f"AND {column} < {current_start}"
+                )
+        raise ValueError(f"Fiscal time ranges are not implemented for dialect '{dialect.value}'.")
 
     def _period_filter(
         self,
@@ -820,7 +965,26 @@ class QueryPlanner:
                 filt.glossary_term,
             )
 
-        column_expr = self._resolve_dimension(filt.entity, schema_context).sql_expression
+        preferred_table = primary_table
+        if not any(
+            table.table_name == primary_table
+            and any(column.column_name == filt.entity for column in table.columns)
+            for table in schema_context.tables
+        ):
+            # When a fact metric is grouped or filtered by a repeated dimension
+            # such as ``region``, choose a related table that has a governed join
+            # path to the fact table instead of an unrelated scorecard table.
+            for table in schema_context.tables:
+                if any(
+                    column.column_name == filt.entity for column in table.columns
+                ) and self._scl_manager.get_join_path(primary_table, table.table_name):
+                    preferred_table = table.table_name
+                    break
+        column_expr = self._resolve_dimension(
+            filt.entity,
+            schema_context,
+            preferred_table=preferred_table,
+        ).sql_expression
         return ResolvedFilter(
             sql_fragment=self._build_filter_fragment(column_expr, filt),
             original_semantic_filter=original,

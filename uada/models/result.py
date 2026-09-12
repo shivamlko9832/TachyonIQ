@@ -50,7 +50,10 @@ class QueryResult(BaseModel):
         default=None,
         description="The row count limit that caused truncation.",
     )
-    executed_sql: str = Field(description="The exact SQL that was executed.")
+    executed_sql: str | None = Field(
+        default=None,
+        description="The exact SQL that was executed. Redacted for viewer identities.",
+    )
     execution_time_ms: float
     database_dialect: str
 
@@ -189,23 +192,24 @@ class AnalysedResult(BaseModel):
 
 class ChartType(str, Enum):
     """Supported Vega-Lite chart types."""
+
     BAR = "bar"
     LINE = "line"
     AREA = "area"
     POINT = "point"
-    ARC = "arc"           # Pie / donut
-    RECT = "rect"         # Heatmap
+    ARC = "arc"  # Pie / donut
+    RECT = "rect"  # Heatmap
     BOXPLOT = "boxplot"
-    RULE = "rule"         # Reference line
-    KPI = "kpi"           # Single-value metric card
-    BAR_GROUPED = "bar_grouped"   # Multi-series grouped bar
-    BAR_STACKED = "bar_stacked"   # Stacked bar (composition)
-    HISTOGRAM = "histogram"       # Value distribution
-    WATERFALL = "waterfall"       # Running total / bridge chart
-    FUNNEL = "funnel"             # Conversion funnel
-    TREEMAP = "treemap"           # Hierarchical proportions
-    TABLE_VIZ = "table_viz"       # Formatted table fallback
-    RULE_OVERLAY = "rule_overlay" # Anomaly reference line
+    RULE = "rule"  # Reference line
+    KPI = "kpi"  # Single-value metric card
+    BAR_GROUPED = "bar_grouped"  # Multi-series grouped bar
+    BAR_STACKED = "bar_stacked"  # Stacked bar (composition)
+    HISTOGRAM = "histogram"  # Value distribution
+    WATERFALL = "waterfall"  # Running total / bridge chart
+    FUNNEL = "funnel"  # Conversion funnel
+    TREEMAP = "treemap"  # Hierarchical proportions
+    TABLE_VIZ = "table_viz"  # Formatted table fallback
+    RULE_OVERLAY = "rule_overlay"  # Anomaly reference line
 
 
 class VegaLiteSpec(BaseModel):
@@ -243,20 +247,20 @@ class VegaLiteSpec(BaseModel):
         return True, None
 
 
-
 class KpiSpec(BaseModel):
     """
     A single-value KPI card.
     Returned when the result is a scalar metric (row_count=1, one numeric column).
     The frontend renders this as a large headline number with optional trend arrow.
     """
+
     value: float | int | str
-    label: str                              # metric name / column label
-    formatted_value: str                    # e.g. "$2.4M", "12.3%", "1,234"
-    trend_direction: str | None = None      # "up" | "down" | "flat" | None
-    trend_pct: float | None = None          # e.g. 12.3 for +12.3%
-    comparison_label: str | None = None     # e.g. "vs last quarter"
-    unit: str | None = None                 # e.g. "$", "%", "orders"
+    label: str  # metric name / column label
+    formatted_value: str  # e.g. "$2.4M", "12.3%", "1,234"
+    trend_direction: str | None = None  # "up" | "down" | "flat" | None
+    trend_pct: float | None = None  # e.g. 12.3 for +12.3%
+    comparison_label: str | None = None  # e.g. "vs last quarter"
+    unit: str | None = None  # e.g. "$", "%", "orders"
 
 
 class VisualisationFallback(BaseModel):
@@ -267,7 +271,6 @@ class VisualisationFallback(BaseModel):
 
     reason: str
     data_available: bool = True
-
 
 
 class OlapInsights(BaseModel):
@@ -288,7 +291,6 @@ class OlapInsights(BaseModel):
 
     # Detected anomaly rows (index, column, value, z_score) via DuckDB window function
     duckdb_anomalies: list[dict[str, object]] = Field(default_factory=list)
-
 
 
 # ── P3 Advanced Analytics Models ─────────────────────────────────────────────
@@ -349,6 +351,20 @@ class ForecastPoint(BaseModel):
     forecast: float
     lower_ci: float
     upper_ci: float
+    group: str | None = Field(
+        default=None,
+        description="Optional dimension label for grouped forecasts.",
+    )
+
+
+class ForecastSeries(BaseModel):
+    """Forecast for one member of a grouped time series."""
+
+    group: str
+    method: str
+    historical_periods: int
+    points: list[ForecastPoint] = Field(default_factory=list)
+    validation_rmse: float | None = None
 
 
 class ForecastResult(BaseModel):
@@ -363,7 +379,18 @@ class ForecastResult(BaseModel):
     model_fit_rmse: float | None = None
     skipped: bool = False
     skip_reason: str | None = None
-
+    confidence_level: float = 0.95
+    frequency: str | None = None
+    training_start: str | None = None
+    training_end: str | None = None
+    validation_rmse: float | None = None
+    validation_mae: float | None = None
+    validation_mape: float | None = None
+    candidate_scores: dict[str, float] = Field(default_factory=dict)
+    assumptions: list[str] = Field(default_factory=list)
+    data_fingerprint: str | None = None
+    group_columns: list[str] = Field(default_factory=list)
+    series: list[ForecastSeries] = Field(default_factory=list)
 
 
 # ── P4-A Analytics Models ─────────────────────────────────────────────────────
@@ -375,8 +402,7 @@ class ColumnQualityIssue(BaseModel):
     column: str
     issue_type: str = Field(
         description=(
-            "'all_nulls' | 'high_nulls' | 'type_mismatch' | "
-            "'empty_strings' | 'duplicate_rows'"
+            "'all_nulls' | 'high_nulls' | 'type_mismatch' | 'empty_strings' | 'duplicate_rows'"
         )
     )
     severity: str = Field(description="'high' | 'medium' | 'low'")
@@ -440,11 +466,13 @@ class ExplainabilityContext(BaseModel):
         description="Step-by-step plain-English derivation of the result.",
     )
 
+
 # ── Final Response ─────────────────────────────────────────────────────────────
 
 
 class PipelineStage(str, Enum):
     """Pipeline stage identifiers for error attribution."""
+
     SCHEMA_LINKING = "schema_linking"
     INTENT_EXTRACTION = "intent_extraction"
     QUERY_PLANNING = "query_planning"
@@ -475,8 +503,6 @@ class UADAError(BaseModel):
     )
 
 
-
-
 class GeneratedInsights(BaseModel):
     """
     LLM-generated insight layer (P4-A-3, GAP-14).
@@ -503,6 +529,15 @@ class GeneratedInsights(BaseModel):
         default="medium",
         description="'high' | 'medium' | 'low' — analyst confidence in the insights.",
     )
+    evidence_verified: bool = Field(
+        default=False,
+        description="True when every retained numerical finding was matched to evidence.",
+    )
+    verification_notes: list[str] = Field(
+        default_factory=list,
+        description="Machine-generated notes about claim grounding.",
+    )
+
 
 class UADAResponse(BaseModel):
     """
@@ -528,6 +563,11 @@ class UADAResponse(BaseModel):
     row_count: int | None = None
     is_truncated: bool = False
     execution_time_ms: float | None = None
+    query_result: QueryResult | None = Field(
+        default=None,
+        description="Structured result data used by the UI and downstream clients. "
+        "The executed SQL inside this object is redacted for viewers.",
+    )
     visualisation: VegaLiteSpec | KpiSpec | VisualisationFallback | None = None
     supplementary_visualisations: list[VegaLiteSpec | KpiSpec | VisualisationFallback] = Field(
         default_factory=list,
@@ -555,6 +595,11 @@ class UADAResponse(BaseModel):
     data_quality: "DataQualityReport | None" = None
     explainability: "ExplainabilityContext | None" = None
     generated_insights: GeneratedInsights | None = None
+    statistical_analysis: dict[str, Any] | None = Field(
+        default=None,
+        description="Deterministic statistical tests and descriptive statistics for the result. "
+        "Values are safe for presentation and are never generated by the LLM.",
+    )
 
     # ── Error path ────────────────────────────────────────────────────────────
     error: UADAError | None = None
@@ -585,6 +630,10 @@ class UADAResponse(BaseModel):
         "critic is not wired.",
     )
     pipeline_duration_ms: float | None = None
+    context_snapshot: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Public conversation context after this turn. SQL is excluded.",
+    )
 
     @property
     def is_success(self) -> bool:

@@ -218,7 +218,7 @@ class TestAuthMiddleware:
         app = create_app(orchestrator=orchestrator, settings=settings)
 
         with TestClient(app) as client:
-            response = client.get("/health")
+            response = client.delete("/session/some-session-id")
 
         assert response.status_code == 401
 
@@ -227,7 +227,9 @@ class TestAuthMiddleware:
         app = create_app(orchestrator=orchestrator, settings=settings)
 
         with TestClient(app) as client:
-            response = client.get("/health", headers={"Authorization": "Bearer wrong-key"})
+            response = client.delete(
+                "/session/some-session-id", headers={"Authorization": "Bearer wrong-key"}
+            )
 
         assert response.status_code == 401
 
@@ -236,7 +238,9 @@ class TestAuthMiddleware:
         app = create_app(orchestrator=orchestrator, settings=settings)
 
         with TestClient(app) as client:
-            response = client.get("/health", headers={"Authorization": "Bearer secret-key"})
+            response = client.delete(
+                "/session/some-session-id", headers={"Authorization": "Bearer secret-key"}
+            )
 
         assert response.status_code == 200
 
@@ -394,11 +398,11 @@ class TestSchemaRefresh:
     """
 
     @pytest.fixture
-    def refresh_app(self, orchestrator: PipelineOrchestrator):
+    def refresh_app(self, orchestrator: PipelineOrchestrator, tmp_path):
         """App with a real ConnectionManager and a pre-registered SQLite connection."""
         from uada.db.connection_manager import ConnectionConfig, DatabaseConnectionManager
 
-        mgr = DatabaseConnectionManager()
+        mgr = DatabaseConnectionManager(tmp_path / "connections")
         # Register a fresh in-memory SQLite db with two tables
         import sqlite3
         import tempfile
@@ -451,8 +455,35 @@ class TestSchemaRefresh:
         assert isinstance(body["table_count"], int)
         assert body["table_count"] >= 1
         assert isinstance(body["column_count"], int)
+        assert isinstance(body["relationship_count"], int)
         assert "tables" in body
         assert isinstance(body["tables"], list)
+
+    def test_browse_schema_returns_metadata_without_profiling(self, refresh_app) -> None:
+        app, cid = refresh_app
+        with TestClient(app) as client:
+            response = client.get(f"/connections/{cid}/schema")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["table_count"] >= 1
+        assert body["column_count"] >= 1
+        assert body["profiled_table_count"] == 0
+        assert body["profiled_column_count"] == 0
+        assert body["tables"][0]["columns"]
+
+    def test_semantic_context_exposes_public_contract(self, refresh_app) -> None:
+        """The workspace explorer receives definitions without security internals."""
+        app, _cid = refresh_app
+        with TestClient(app) as client:
+            response = client.get("/semantic-context")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["database"]["name"] == "test_db"
+        assert body["tables"][0]["name"] == "orders"
+        assert body["metrics"][0]["name"] == "revenue"
+        assert "security" not in body
 
     def test_refresh_tables_have_column_summaries(self, refresh_app) -> None:
         """Each table entry must have column_count and a columns list."""
@@ -473,8 +504,6 @@ class TestSchemaRefresh:
         SECURITY: sample_values must never appear anywhere in the response body.
         This is a hard invariant — sample values could contain PII.
         """
-        import json
-
         app, cid = refresh_app
         with TestClient(app) as client:
             response = client.post(f"/connections/{cid}/refresh")
@@ -512,12 +541,12 @@ class TestSchemaRefresh:
                 assert "is_temporal" in col
 
     def test_refresh_returns_404_for_unknown_connection(
-        self, orchestrator: PipelineOrchestrator
+        self, orchestrator: PipelineOrchestrator, tmp_path
     ) -> None:
         """Requesting refresh for a non-existent connection must return 404."""
         from uada.db.connection_manager import DatabaseConnectionManager
 
-        mgr = DatabaseConnectionManager()
+        mgr = DatabaseConnectionManager(tmp_path / "connections")
         app = create_app(orchestrator=orchestrator)
         app.state.connection_manager = mgr
 

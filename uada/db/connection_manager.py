@@ -116,7 +116,9 @@ class ConnectionTestResult(BaseModel):
 class DiscoverResult(BaseModel):
     connection_id: str
     table_count: int
+    column_count: int = 0
     relationship_count: int
+    row_estimate: int = 0
     dialect: str
     database_name: str
     schema_fingerprint: str
@@ -150,7 +152,7 @@ class DatabaseConnectionManager:
 
     # ── Registration ─────────────────────────────────────────────────────────
 
-    def register(self, config: ConnectionConfig) -> str:
+    def register(self, config: ConnectionConfig, *, owner_id: str | None = None) -> str:
         """
         Register a new connection and return its connection_id.
         Does NOT test the connection — call ``test_connection()`` separately.
@@ -167,13 +169,19 @@ class DatabaseConnectionManager:
             "table_count": 0,
             "database_name": "",
             "created_at": _now_iso(),
+            "owner_id": owner_id,
         }
         self._save_registry()
         logger.info("Registered connection '%s' (id=%s, dialect=%s)", config.name, connection_id, config.dialect)
         return connection_id
 
-    def delete_connection(self, connection_id: str) -> None:
+    def delete_connection(
+        self, connection_id: str, *, owner_id: str | None = None, admin: bool = False
+    ) -> None:
         """Remove a connection and release its adapter pool."""
+        self._check_access(connection_id, owner_id=owner_id, admin=admin)
+        if connection_id not in self._meta:
+            raise KeyError(f"Connection '{connection_id}' not found.")
         adapter = self._adapters.pop(connection_id, None)
         if adapter is not None:
             try:
@@ -187,8 +195,11 @@ class DatabaseConnectionManager:
 
     # ── Adapter access ───────────────────────────────────────────────────────
 
-    def get_adapter(self, connection_id: str) -> DatabaseAdapter:
+    def get_adapter(
+        self, connection_id: str, *, owner_id: str | None = None, admin: bool = False
+    ) -> DatabaseAdapter:
         """Return a cached adapter; create one on first call."""
+        self._check_access(connection_id, owner_id=owner_id, admin=admin)
         if connection_id in self._adapters:
             return self._adapters[connection_id]
         config = self._configs.get(connection_id)
@@ -199,24 +210,28 @@ class DatabaseConnectionManager:
         return adapter
 
     def _create_adapter(self, config: ConnectionConfig) -> DatabaseAdapter:
-        from uada.db.adapter import SQLAlchemyAdapter
+        from uada.db.adapter_registry import AdapterRegistry
 
-        url = config.to_url()
         # Settings shim — only fields the adapter uses
         from types import SimpleNamespace
         shim = SimpleNamespace(
             db_query_timeout_seconds=30,
             db_max_rows=1000,
+            db_pool_size=5,
+            db_pool_recycle_seconds=1800,
         )
-        return SQLAlchemyAdapter(url, shim)  # type: ignore[arg-type]
+        return AdapterRegistry.build(config, shim)  # type: ignore[arg-type]
 
     # ── Operations ───────────────────────────────────────────────────────────
 
-    def test_connection(self, connection_id: str) -> ConnectionTestResult:
+    def test_connection(
+        self, connection_id: str, *, owner_id: str | None = None, admin: bool = False
+    ) -> ConnectionTestResult:
         """Run a connectivity check and return latency + server version."""
         import time
+        self._check_access(connection_id, owner_id=owner_id, admin=admin)
         try:
-            adapter = self.get_adapter(connection_id)
+            adapter = self.get_adapter(connection_id, owner_id=owner_id, admin=admin)
             t0 = time.perf_counter()
             ok = adapter.test_connection()
             latency_ms = (time.perf_counter() - t0) * 1000
@@ -231,18 +246,25 @@ class DatabaseConnectionManager:
                 )
             return ConnectionTestResult(connection_id=connection_id, success=False, error="test_connection() returned False")
         except Exception as exc:  # noqa: BLE001
+            logger.warning("Connection test failed for %s: %s", connection_id, exc)
             self._meta[connection_id]["status"] = "error"
             self._save_registry()
-            return ConnectionTestResult(connection_id=connection_id, success=False, error=str(exc))
+            return ConnectionTestResult(
+                connection_id=connection_id,
+                success=False,
+                error="Connection test failed.",
+            )
 
-    def discover_schema(self, connection_id: str) -> DiscoverResult:
+    def discover_schema(
+        self, connection_id: str, *, owner_id: str | None = None, admin: bool = False
+    ) -> DiscoverResult:
         """Reflect schema metadata without full profiling."""
-        adapter = self.get_adapter(connection_id)
+        adapter = self.get_adapter(connection_id, owner_id=owner_id, admin=admin)
         raw = adapter.get_raw_schema()
         table_count = len(raw.tables)
         rel_count = sum(
             1
-            for t in raw.tables.values()
+            for t in raw.tables
             for c in t.columns
             if c.is_foreign_key
         )
@@ -255,7 +277,9 @@ class DatabaseConnectionManager:
         return DiscoverResult(
             connection_id=connection_id,
             table_count=table_count,
+            column_count=sum(len(t.columns) for t in raw.tables),
             relationship_count=rel_count,
+            row_estimate=sum(t.row_count_estimate or 0 for t in raw.tables),
             dialect=raw.dialect,
             database_name=raw.database_name,
             schema_fingerprint=raw.schema_fingerprint,
@@ -263,20 +287,67 @@ class DatabaseConnectionManager:
 
     # ── Listing ──────────────────────────────────────────────────────────────
 
-    def list_connections(self) -> list[ConnectionSummary]:
+    def list_connections(
+        self, *, owner_id: str | None = None, admin: bool = False
+    ) -> list[ConnectionSummary]:
         """Return all registered connections — no credentials."""
-        return [ConnectionSummary(**m) for m in self._meta.values()]
+        return [
+            ConnectionSummary(**m)
+            for m in self._meta.values()
+            if admin or owner_id is None or m.get("owner_id") == owner_id
+        ]
 
-    def get_summary(self, connection_id: str) -> ConnectionSummary | None:
+    def get_summary(
+        self, connection_id: str, *, owner_id: str | None = None, admin: bool = False
+    ) -> ConnectionSummary | None:
         m = self._meta.get(connection_id)
+        if m is not None and not (admin or owner_id is None or m.get("owner_id") == owner_id):
+            return None
         return ConnectionSummary(**m) if m else None
+
+    def _check_access(
+        self, connection_id: str, *, owner_id: str | None, admin: bool
+    ) -> None:
+        """Enforce connection ownership for request-scoped callers.
+
+        ``owner_id=None`` remains the internal/admin scope used by startup
+        code and backwards-compatible direct manager callers. HTTP routes pass
+        the authenticated subject for non-admin roles.
+        """
+        meta = self._meta.get(connection_id)
+        if meta is None:
+            raise KeyError(f"Connection '{connection_id}' not found.")
+        if admin or owner_id is None:
+            return
+        if meta.get("owner_id") != owner_id:
+            raise PermissionError("Connection is not available to this identity.")
 
     # ── Persistence helpers ──────────────────────────────────────────────────
 
     def _load_registry(self) -> dict[str, dict[str, Any]]:
         if self._registry_path.exists():
             try:
-                return json.loads(self._registry_path.read_text())
+                metadata = json.loads(self._registry_path.read_text())
+                # SQLite and DuckDB connections do not require credentials.
+                # Rebuild their runtime configs from the persisted, non-secret
+                # metadata so they remain usable after an application reload.
+                # Credentialed connections intentionally remain metadata-only;
+                # their credentials must be supplied again at registration.
+                for connection_id, record in metadata.items():
+                    if str(record.get("dialect", "")).lower() not in {"sqlite", "duckdb"}:
+                        continue
+                    self._configs[connection_id] = ConnectionConfig(
+                        name=record.get("name", connection_id),
+                        dialect=record.get("dialect", "sqlite"),
+                        host=record.get("host", ""),
+                        port=int(record.get("port", 0) or 0),
+                        database=record.get("database", ""),
+                        username="",
+                        password=SecretStr(""),
+                        ssl=bool(record.get("ssl", True)),
+                        extra=record.get("extra", {}),
+                    )
+                return metadata
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not load connections.json: %s", exc)
         return {}
