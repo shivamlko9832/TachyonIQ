@@ -351,3 +351,9 @@ def test_governed_profile_replaces_invented_planning_fields(
     assert normalized.references_prior_turn is False
     assert normalized.prior_turn_id is None
     assert normalized.follow_up_description is None
+
+    plan = QueryPlanner(manager, strict_semantics=True).plan(
+        normalized, _context()
+    )
+    assert plan.primary_table.table_name == "business_kpi_monthly"
+    assert plan.joins == []

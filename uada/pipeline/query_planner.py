@@ -45,7 +45,12 @@ logger = logging.getLogger(__name__)
 # same). Only the Postgres spelling differs.
 _SCHEMA_DIALECT_TO_QUERY_PLAN_DIALECT: dict[str, str] = {"postgresql": "postgres"}
 
-_TABLE_COLUMN_PATTERN = re.compile(r"\b(\w+)\.\w+")
+# Match SQL identifiers such as ``orders.amount`` without mistaking decimal
+# literals such as ``100.0`` for table-qualified columns.  SCL identifiers use
+# the portable unquoted SQL identifier subset enforced by the schema models.
+_TABLE_COLUMN_PATTERN = re.compile(
+    r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*|\*)"
+)
 
 
 def _first_table_reference(sql_expression: str) -> str | None:
