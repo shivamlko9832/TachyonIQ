@@ -116,7 +116,7 @@ class VisualisationGenerator:
 
     async def generate(
         self, result: AnalysedResult, intent: AnalyticalIntent
-    ) -> VegaLiteSpec | VisualisationFallback:
+    ) -> VegaLiteSpec | KpiSpec | VisualisationFallback:
         """Select a chart type and build its Vega-Lite spec for `result`."""
         decision = self._select_chart_type(result, intent)
         if isinstance(decision, _NoChart):
@@ -156,13 +156,16 @@ class VisualisationGenerator:
         df: pd.DataFrame,
         result: AnalysedResult,
         intent: AnalyticalIntent,
+        column: str | None = None,
     ) -> KpiSpec | VisualisationFallback:
-        """Build a KPI card spec for a single scalar result."""
+        """Build a KPI card from one observed numeric result column."""
         try:
             numeric_cols = [c.column for c in result.numeric_summaries if c.column in df.columns]
             if not numeric_cols:
                 return VisualisationFallback(reason="No numeric column for KPI card.")
-            col = numeric_cols[0]
+            col = column or numeric_cols[0]
+            if col not in numeric_cols:
+                return VisualisationFallback(reason=f"Numeric KPI column {col!r} is unavailable.")
             raw_value = df[col].iloc[0]
             if pd.isna(raw_value):
                 return VisualisationFallback(reason="KPI value is null.")
@@ -210,7 +213,7 @@ class VisualisationGenerator:
         # Trust the executed result shape. Intent extraction can retain a time
         # dimension for phrases such as "this month" even when the governed SQL
         # correctly returns one scalar aggregate.
-        if row_count <= 1 and numeric_column_count <= 1:
+        if row_count <= 1 and numeric_column_count >= 1:
             return ChartType.KPI
         if intent.question_type == QuestionType.TIME_SERIES:
             return ChartType.LINE
@@ -403,12 +406,25 @@ class VisualisationGenerator:
         df = pd.DataFrame(
             result.query_result.rows, columns=result.query_result.column_names
         )
-        if df.empty or result.query_result.row_count < 2:
+        if df.empty:
             return supplementary
 
         numeric_columns = [
             c.column for c in result.numeric_summaries if c.column in df.columns
         ]
+
+        # A one-row result with several measures is a KPI group.  Plotting one
+        # measure against another invents a relationship that the query never
+        # established, so expose the remaining observed measures as cards.
+        if result.query_result.row_count == 1:
+            for column in numeric_columns[1:3]:
+                card = self._build_kpi_spec(df, result, intent, column=column)
+                if isinstance(card, KpiSpec):
+                    supplementary.append(card)
+            return supplementary
+
+        if result.query_result.row_count < 2:
+            return supplementary
 
         qtype = intent.question_type
 

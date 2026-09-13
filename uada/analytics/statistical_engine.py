@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from datetime import date, timedelta
 from statistics import NormalDist
 from typing import TYPE_CHECKING, Any
 
@@ -75,6 +76,26 @@ class StatisticalEngine:
             ],
             "limitations": [],
         }
+
+        dimension_aliases = [
+            dimension.output_alias
+            for dimension in plan.dimensions
+            if dimension.output_alias in frame.columns
+        ]
+        if dimension_aliases:
+            breakdown_columns = [
+                *dimension_aliases,
+                *(
+                    measure.output_alias
+                    for measure in plan.measures
+                    if measure.output_alias in frame.columns
+                ),
+            ]
+            report["breakdown"] = {
+                "dimensions": dimension_aliases,
+                "population_observations": int(len(frame)),
+                "rows": frame[breakdown_columns].head(50).to_dict(orient="records"),
+            }
 
         if plan.order_by and plan.dimensions:
             report["ranking"] = self._ranking(frame, plan)
@@ -327,6 +348,7 @@ class StatisticalEngine:
             top = ranking["rows"][0]
             dimension = ranking.get("dimension", "group")
             ordered_by = ranking.get("ordered_by", "metric")
+            rank_label = "lowest" if ranking.get("direction") == "asc" else "highest"
             evidence_parts = [
                 f"{name.replace('_', ' ')} {self._format_number(value)}"
                 for name, value in top.items()
@@ -334,37 +356,139 @@ class StatisticalEngine:
             ]
             evidence = "; ".join(evidence_parts)
             return (
-                f"{top.get(dimension)} ranks highest by {ordered_by.replace('_', ' ')}"
+                f"{top.get(dimension)} ranks {rank_label} by {ordered_by.replace('_', ' ')}"
                 f" among the {report.get('sample_size', 0)} returned groups"
                 f". Supporting observed measures: {evidence}."
             )
 
         comparison = report.get("comparison", {})
         if comparison:
-            first = next(iter(comparison.values()))
-            if isinstance(first, dict):
+            measure_by_alias = {
+                measure.output_alias: measure for measure in plan.measures
+            }
+            parts: list[str] = []
+            for alias, values in comparison.items():
+                if not isinstance(values, dict):
+                    continue
+                measure = measure_by_alias.get(alias)
+                if measure is None:
+                    continue
+                latest = values.get("latest")
+                previous = values.get("comparison")
+                absolute = values.get("absolute_change")
+                relative = values.get("change_pct")
+                if latest is None or previous is None or absolute is None:
+                    continue
+                label = (
+                    measure.name.removeprefix("scorecard_")
+                    .removeprefix("waste_")
+                    .replace("_", " ")
+                )
+                direction = "increased" if float(absolute) >= 0 else "decreased"
+                if (measure.unit or "").strip().upper() in {
+                    "%",
+                    "PERCENT",
+                    "PERCENTAGE",
+                }:
+                    detail = (
+                        f"{label} {direction} by {abs(float(absolute)):.2f} percentage points "
+                        f"from {self._format_measure_value(previous, measure.unit)} to "
+                        f"{self._format_measure_value(latest, measure.unit)}"
+                    )
+                    if relative is not None:
+                        detail += f" ({abs(float(relative)):.2f}% relative {direction.rstrip('d')})"
+                else:
+                    relative_text = (
+                        f" by {abs(float(relative)):.2f}%"
+                        if relative is not None
+                        else ""
+                    )
+                    detail = (
+                        f"{label} {direction}{relative_text} "
+                        f"from {self._format_measure_value(previous, measure.unit)} to "
+                        f"{self._format_measure_value(latest, measure.unit)} "
+                        f"(absolute change {self._format_measure_value(absolute, measure.unit)})"
+                    )
+                parts.append(detail)
+            if parts:
+                scope = self._time_scope_label(intent)
+                prior_label = (
+                    intent.time_comparison.comparison_label
+                    if intent.time_comparison is not None
+                    else "comparison period"
+                )
                 return (
-                    f"The latest period is {self._format_number(first.get('latest'))}, "
-                    f"a {self._format_number(first.get('change_pct'))}% change from "
-                    f"{self._format_number(first.get('comparison'))}."
+                    f"Governed comparison of {scope or 'the selected period'} with "
+                    f"{prior_label}: " + "; ".join(parts) + "."
                 )
 
-        # A scalar aggregate is already a complete analytical result. Narrate
-        # the exact governed value instead of falling through to "Found 1 row."
-        # This branch reads only the deterministic report produced from the
-        # validated query result; it contains no demo-specific values.
-        if report.get("sample_size") == 1 and len(plan.measures) == 1 and not plan.dimensions:
-            measure = plan.measures[0]
-            aggregate = report.get("aggregates", {}).get(measure.output_alias)
-            if isinstance(aggregate, dict) and aggregate.get("value") is not None:
-                label = measure.name.removeprefix("scorecard_").replace("_", " ")
-                scope = self._time_scope_label(intent)
+        breakdown = report.get("breakdown", {})
+        if isinstance(breakdown, dict) and breakdown.get("rows") and plan.measures:
+            rows = breakdown["rows"]
+            dimensions = list(breakdown.get("dimensions", []))
+            primary_alias = plan.measures[0].output_alias
+            ordered = sorted(
+                rows,
+                key=lambda row: float(row.get(primary_alias) or float("-inf")),
+                reverse=True,
+            )
+            group_parts: list[str] = []
+            for row in ordered[:8]:
+                group = ", ".join(str(row.get(name)) for name in dimensions)
+                values: list[str] = []
+                for measure in plan.measures:
+                    raw_value = row.get(measure.output_alias)
+                    if raw_value is None:
+                        continue
+                    label = (
+                        measure.name.removeprefix("scorecard_")
+                        .removeprefix("waste_")
+                        .replace("_", " ")
+                    )
+                    values.append(
+                        f"{label} {self._format_measure_value(raw_value, measure.unit)}"
+                    )
+                group_parts.append(f"{group}: " + ", ".join(values))
+            scope = self._time_scope_label(intent)
+            scope_text = f" for {scope}" if scope else ""
+            population = int(breakdown.get("population_observations", len(rows)))
+            truncation = (
+                f" The first {len(group_parts)} groups are shown."
+                if population > len(group_parts)
+                else ""
+            )
+            return (
+                f"Governed breakdown{scope_text} across {population} group(s): "
+                + "; ".join(group_parts)
+                + "."
+                + truncation
+            )
+
+        # A one-row aggregate is already a complete analytical result. Narrate
+        # every requested governed measure from the deterministic report. This
+        # avoids silently omitting later measures or asking an LLM to restate
+        # values it did not calculate.
+        if report.get("sample_size") == 1 and plan.measures and not plan.dimensions:
+            parts: list[str] = []
+            aggregates = report.get("aggregates", {})
+            for measure in plan.measures:
+                aggregate = aggregates.get(measure.output_alias)
+                if not isinstance(aggregate, dict) or aggregate.get("value") is None:
+                    continue
+                label = (
+                    measure.name.removeprefix("scorecard_")
+                    .removeprefix("waste_")
+                    .replace("_", " ")
+                )
                 value = self._format_measure_value(aggregate["value"], measure.unit)
+                parts.append(f"{label} is {value}")
+            if parts:
+                scope = self._time_scope_label(intent)
                 scope_text = f" for {scope}" if scope else ""
                 return (
-                    f"{label.capitalize()}{scope_text} is {value}. "
-                    "It was calculated from the governed metric definition and the "
-                    "validated aggregate result."
+                    f"Governed results{scope_text}: " + "; ".join(parts) + ". "
+                    "Each value was calculated from its semantic metric definition "
+                    "and the validated aggregate result."
                 )
         return None
 
@@ -772,7 +896,11 @@ class StatisticalEngine:
                 label = label.replace("n", str(time_range.period_count), 1)
             return label
         if time_range.start_date and time_range.end_date:
-            return f"{time_range.start_date} through {time_range.end_date}"
+            try:
+                inclusive_end = date.fromisoformat(time_range.end_date[:10]) - timedelta(days=1)
+                return f"{time_range.start_date[:10]} through {inclusive_end.isoformat()}"
+            except ValueError:
+                return f"{time_range.start_date} up to {time_range.end_date} (exclusive)"
         return None
 
     @staticmethod

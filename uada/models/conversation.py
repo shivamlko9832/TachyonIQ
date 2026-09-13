@@ -19,7 +19,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from uada.models.intent import AnalyticalIntent
+from uada.models.intent import AnalyticalIntent, SemanticFilter, TimeComparison, TimeRange
 
 
 class TurnStatus(str, Enum):
@@ -197,8 +197,21 @@ class ActiveContext(BaseModel):
         "The user can reset by starting a completely new query.",
     )
 
+    semantic_filters: list[SemanticFilter] = Field(
+        default_factory=list,
+        description="Typed governed filters that can be reapplied to follow-up plans.",
+    )
+
     # Time context currently in effect
     current_time_range: str | None = None
+    time_range: TimeRange | None = Field(
+        default=None,
+        description="Typed active time range retained for deterministic follow-ups.",
+    )
+    time_comparison: TimeComparison | None = Field(
+        default=None,
+        description="Typed comparison window retained for deterministic follow-ups.",
+    )
 
     # Tables currently referenced
     current_tables: list[str] = Field(default_factory=list)

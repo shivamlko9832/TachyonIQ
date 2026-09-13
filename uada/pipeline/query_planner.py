@@ -553,8 +553,10 @@ class QueryPlanner:
 
         time_resolution = None
         if intent.time_range is not None:
-            time_column = intent.time_dimension or self._find_default_time_column(
-                schema_context, primary_table_name
+            time_column = self._resolve_time_column(
+                intent.time_dimension,
+                schema_context,
+                primary_table_name,
             )
             if time_column is None:
                 logger.warning("Time range given but no time column could be resolved.")
@@ -679,6 +681,57 @@ class QueryPlanner:
                     return column.column_name
         return schema_context.default_time_column
 
+    def _resolve_time_column(
+        self,
+        requested: str | None,
+        schema_context: SchemaContext,
+        primary_table: str,
+    ) -> str | None:
+        """Resolve a model-suggested time field against governed table metadata.
+
+        Natural-language models sometimes return a bucket name such as ``month``
+        as though it were a physical column.  Trusting that string produced SQL
+        such as ``orders.month`` even though the governed date column is
+        ``orders.order_date``.  Only an actual, non-excluded column (or one of its
+        declared aliases) is accepted; otherwise the primary table's configured
+        default time column is used.
+        """
+        if requested:
+            requested_table, separator, requested_column = requested.rpartition(".")
+            table_name = requested_table if separator else primary_table
+            column_name = requested_column if separator else requested
+
+            if table_name == primary_table:
+                semantic_table = self._scl_manager.get_table(primary_table)
+                if semantic_table is not None:
+                    lowered = column_name.casefold()
+                    for column in semantic_table.included_columns:
+                        names = {
+                            column.name.casefold(),
+                            *(alias.casefold() for alias in column.aliases),
+                        }
+                        if lowered in names and column.is_temporal:
+                            return column.name
+
+                for table in schema_context.tables:
+                    if table.table_name != primary_table:
+                        continue
+                    for column in table.columns:
+                        if (
+                            column.column_name.casefold() == column_name.casefold()
+                            and column.is_temporal
+                        ):
+                            return column.column_name
+
+            logger.warning(
+                "Ignoring unresolved time dimension '%s' for primary table '%s'; "
+                "using its governed default time column.",
+                requested,
+                primary_table,
+            )
+
+        return self._find_default_time_column(schema_context, primary_table)
+
     # ── Measures ─────────────────────────────────────────────────────────────
 
     def _resolve_measure(self, name: str, schema_context: SchemaContext) -> ResolvedMeasure:
@@ -724,20 +777,54 @@ class QueryPlanner:
         choosing an unrelated table simply because retrieval happened to rank
         it first.
         """
+        if "." in name:
+            requested_table, requested_column = name.rsplit(".", 1)
+            semantic_table = self._scl_manager.get_table(requested_table)
+            if semantic_table is not None and any(
+                column.name == requested_column
+                for column in semantic_table.included_columns
+            ):
+                return ResolvedDimension(
+                    name=requested_column,
+                    sql_expression=f"{requested_table}.{requested_column}",
+                    output_alias=requested_column,
+                )
+            if self._strict_semantics:
+                raise ValueError(
+                    f"Qualified dimension '{name}' is not present in the semantic contract."
+                )
+            name = requested_column
+
         def table_priority(table_name: str) -> int:
             if table_name == preferred_table:
                 return 0
-            if preferred_table and self._scl_manager.get_join_path(
-                preferred_table, table_name
-            ) is not None:
-                return 1
-            return 2
+            if not preferred_table:
+                return 100
+            queue: list[tuple[str, int]] = [(preferred_table, 0)]
+            visited = {preferred_table}
+            while queue:
+                current, distance = queue.pop(0)
+                for join in self._scl_manager.scl.joins:
+                    neighbour = None
+                    if join.from_table == current:
+                        neighbour = join.to_table
+                    elif join.to_table == current:
+                        neighbour = join.from_table
+                    if neighbour is None or neighbour in visited:
+                        continue
+                    if neighbour == table_name:
+                        return distance + 1
+                    visited.add(neighbour)
+                    queue.append((neighbour, distance + 1))
+            return 100
 
         ordered_tables = sorted(
             schema_context.tables,
             key=lambda table: table_priority(table.table_name),
         )
         for table in ordered_tables:
+            if preferred_table and table_priority(table.table_name) >= 100:
+                continue
             for column in table.columns:
                 if column.column_name == name:
                     return ResolvedDimension(
@@ -821,22 +908,59 @@ class QueryPlanner:
 
         additional_tables: list[ResolvedTable] = []
         joins: list[ResolvedJoin] = []
+        added_tables: set[str] = set()
+        added_conditions: set[str] = set()
+
+        def governed_path(start: str, target: str):
+            """Return the shortest declared join path without inventing relationships."""
+            queue: list[tuple[str, list[Any]]] = [(start, [])]
+            visited = {start}
+            while queue:
+                current, path = queue.pop(0)
+                for candidate in self._scl_manager.scl.joins:
+                    if candidate.from_table == current:
+                        neighbour = candidate.to_table
+                    elif candidate.to_table == current:
+                        neighbour = candidate.from_table
+                    else:
+                        continue
+                    if neighbour in visited:
+                        continue
+                    next_path = [*path, candidate]
+                    if neighbour == target:
+                        return next_path
+                    visited.add(neighbour)
+                    queue.append((neighbour, next_path))
+            return None
+
         for other_table in sorted(referenced_tables):
-            join_def = self._scl_manager.get_join_path(primary_table, other_table)
-            if join_def is None:
+            join_path = governed_path(primary_table, other_table)
+            if join_path is None:
                 raise ValueError(
                     "The semantic contract has no governed join between "
                     f"'{primary_table}' and '{other_table}'."
                 )
-            additional_tables.append(ResolvedTable(table_name=other_table))
-            joins.append(
-                ResolvedJoin(
-                    from_table=join_def.from_table,
-                    to_table=join_def.to_table,
-                    join_type=JoinType(join_def.join_type.upper()),
-                    condition=join_def.on,
+            current_table = primary_table
+            for join_def in join_path:
+                joined_table = (
+                    join_def.to_table
+                    if join_def.from_table == current_table
+                    else join_def.from_table
                 )
-            )
+                if joined_table not in added_tables:
+                    additional_tables.append(ResolvedTable(table_name=joined_table))
+                    added_tables.add(joined_table)
+                if join_def.on not in added_conditions:
+                    joins.append(
+                        ResolvedJoin(
+                            from_table=current_table,
+                            to_table=joined_table,
+                            join_type=JoinType(join_def.join_type.upper()),
+                            condition=join_def.on,
+                        )
+                    )
+                    added_conditions.add(join_def.on)
+                current_table = joined_table
         return additional_tables, joins
 
     # ── Time ─────────────────────────────────────────────────────────────────

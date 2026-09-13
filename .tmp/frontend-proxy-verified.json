@@ -1,0 +1,249 @@
+{
+  "session_id": "3b33c0e7-17ba-4ce8-b89e-8ab316193801",
+  "turn_id": 0,
+  "timestamp": "2026-09-13T12:59:02.817351Z",
+  "answer": "Governed results for 2026-01-01 through 2026-12-31: revenue is $268,403,459.60; operating margin pct is 36.47%. Each value was calculated from its semantic metric definition and the validated aggregate result.",
+  "sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct FROM wm_finance_monthly WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-12-31' LIMIT 5000",
+  "row_count": 1,
+  "is_truncated": false,
+  "execution_time_ms": 34.785999974701554,
+  "query_result": {
+    "columns": [
+      {
+        "name": "waste_revenue",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "USD"
+      },
+      {
+        "name": "waste_operating_margin_pct",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "%"
+      }
+    ],
+    "rows": [
+      [
+        268403459.6,
+        36.470458043231574
+      ]
+    ],
+    "row_count": 1,
+    "is_truncated": false,
+    "truncated_at": null,
+    "executed_sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct FROM wm_finance_monthly WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-12-31' LIMIT 5000",
+    "execution_time_ms": 34.785999974701554,
+    "database_dialect": "sqlite"
+  },
+  "visualisation": {
+    "value": 268403459.6,
+    "label": "Waste Revenue",
+    "formatted_value": "$268.4M",
+    "trend_direction": null,
+    "trend_pct": null,
+    "comparison_label": null,
+    "unit": "USD"
+  },
+  "supplementary_visualisations": [
+    {
+      "value": 36.470458043231574,
+      "label": "Waste Operating Margin Pct",
+      "formatted_value": "36.47%",
+      "trend_direction": null,
+      "trend_pct": null,
+      "comparison_label": null,
+      "unit": "%"
+    }
+  ],
+  "key_finding": "waste_revenue: 268,403,459.60",
+  "key_findings_bullets": [
+    "Waste Revenue: total 268,403,459.60, avg 268,403,459.60, range 268,403,459.60–268,403,459.60.",
+    "Waste Operating Margin Pct: total 36.47, avg 36.47, range 36.47–36.47.",
+    "Query returned 1 data point(s)."
+  ],
+  "drivers": [
+    "Insufficient trend data to identify specific drivers. A time-series breakdown may surface contributing factors."
+  ],
+  "anomaly_descriptions": [],
+  "suggested_questions": [
+    "Break down waste revenue by customer name",
+    "How does waste revenue compare to last period?",
+    "What is the trend in waste revenue over the past 12 months?",
+    "Which category has the highest waste revenue?"
+  ],
+  "correlation_result": null,
+  "anomaly_result": null,
+  "forecast_result": null,
+  "data_quality": {
+    "null_rates": {
+      "waste_revenue": 0.0,
+      "waste_operating_margin_pct": 0.0
+    },
+    "duplicate_row_count": 0,
+    "duplicate_row_pct": 0.0,
+    "empty_string_counts": {},
+    "issues": [],
+    "overall_quality_score": 100.0,
+    "summary": "No data quality issues detected across 2 column(s).",
+    "skipped": false,
+    "skip_reason": null
+  },
+  "explainability": {
+    "sql_breakdown": "Tables: wm_finance_monthly | Aggregations: SUM | Filters: 2 condition(s)",
+    "tables_referenced": [
+      "wm_finance_monthly"
+    ],
+    "filters_applied": [
+      "wm_finance_monthly.month >= '2026-01-01'",
+      "wm_finance_monthly.month < '2026-12-31'"
+    ],
+    "aggregations": [
+      "SUM"
+    ],
+    "assumptions": [
+      "NULL values are automatically excluded from aggregate functions (SUM, AVG, MIN, MAX ignore NULLs by SQL standard).",
+      "Query includes LIMIT 5,000 — result may not represent the full dataset.",
+      "A date/time filter is applied — results reflect the specified time period only.",
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts.",
+      "Fewer than three observations limit inferential and variability analysis."
+    ],
+    "chart_rationale": null,
+    "calculation_steps": [
+      "Step 1: Read data from wm_finance_monthly.",
+      "Step 2: Apply filter(s): wm_finance_monthly.month >= '2026-01-01'; wm_finance_monthly.month < '2026-12-31'.",
+      "Step 3: Compute SUM for each group.",
+      "Step 4: Return the top 5,000 rows.",
+      "Applied sample descriptive statistics and t confidence interval.",
+      "Computed the response only from the validated result fingerprint 73cecad97c49."
+    ]
+  },
+  "generated_insights": {
+    "key_findings": [
+      "The validated result contains 1 returned observations."
+    ],
+    "drivers": [],
+    "recommendations": [
+      "Review the verified statistics and evidence for this result."
+    ],
+    "data_quality_notes": [],
+    "confidence": "medium",
+    "evidence_verified": true,
+    "verification_notes": [
+      "Removed 3 ungrounded finding(s).",
+      "Result fingerprint: 73cecad97c49c274."
+    ]
+  },
+  "statistical_analysis": {
+    "engine": "deterministic-statistics-v1",
+    "operations": [
+      "descriptive",
+      "comparison"
+    ],
+    "analysis_profile": "waste_revenue_margin_review",
+    "confidence_level": 0.95,
+    "sample_size": 1,
+    "columns_analyzed": [
+      "waste_revenue",
+      "waste_operating_margin_pct"
+    ],
+    "descriptive": {
+      "waste_revenue": {
+        "count": 1,
+        "null_count": 0,
+        "sum": 268403459.6,
+        "mean": 268403459.6,
+        "median": 268403459.6,
+        "stddev": 0.0,
+        "variance": 0.0,
+        "min": 268403459.6,
+        "max": 268403459.6,
+        "q1": 268403459.6,
+        "q3": 268403459.6,
+        "iqr": 0.0,
+        "coefficient_of_variation_pct": 0.0,
+        "standard_error": 0.0,
+        "mean_confidence_interval": [
+          268403459.6,
+          268403459.6
+        ]
+      },
+      "waste_operating_margin_pct": {
+        "count": 1,
+        "null_count": 0,
+        "sum": 36.470458043231574,
+        "mean": 36.470458043231574,
+        "median": 36.470458043231574,
+        "stddev": 0.0,
+        "variance": 0.0,
+        "min": 36.470458043231574,
+        "max": 36.470458043231574,
+        "q1": 36.470458043231574,
+        "q3": 36.470458043231574,
+        "iqr": 0.0,
+        "coefficient_of_variation_pct": 0.0,
+        "standard_error": 0.0,
+        "mean_confidence_interval": [
+          36.470458043231574,
+          36.470458043231574
+        ]
+      }
+    },
+    "aggregates": {
+      "waste_revenue": {
+        "value": 268403459.6,
+        "method": "sum",
+        "additivity": "additive",
+        "observations": 1
+      },
+      "waste_operating_margin_pct": {
+        "value": 36.470458043231574,
+        "method": "mean_across_returned_buckets",
+        "additivity": "non_additive",
+        "observations": 1
+      }
+    },
+    "tests": {},
+    "anomalies": {},
+    "provenance": {
+      "source_rows": 1,
+      "executed_sql_sha256": "b5183b0d52103130851f0df1505cebc45aff7662a6990031713b755cf29e69f9",
+      "result_sha256": "73cecad97c49c274a616fe98c7caa149801ca6bcf45872cf891367874278ee32",
+      "database_dialect": "sqlite",
+      "is_truncated": false,
+      "deterministic": true
+    },
+    "methods": [
+      "sample descriptive statistics and t confidence interval"
+    ],
+    "assumptions": [
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts."
+    ],
+    "limitations": [
+      "Fewer than three observations limit inferential and variability analysis."
+    ]
+  },
+  "error": null,
+  "question_type": "aggregation",
+  "complexity_tier": "simple",
+  "investigation_steps": null,
+  "evidence_nodes": [],
+  "tables_used": [
+    "wm_finance_monthly"
+  ],
+  "critic_score": 1.0,
+  "pipeline_duration_ms": 4827.483300003223,
+  "context_snapshot": {
+    "current_measures": [
+      "waste_revenue",
+      "waste_operating_margin_pct"
+    ],
+    "current_dimensions": [],
+    "accumulated_filters": [],
+    "current_time_range": "2026-01-01 to 2026-12-31",
+    "current_tables": [
+      "wm_finance_monthly"
+    ]
+  }
+}

@@ -3,9 +3,11 @@ version: "2.0"
 database:
   name: "tachyoniq_enterprise_demo"
   description: >-
-    Synthetic B2B SaaS commerce and customer-success warehouse with three years of
-    revenue, profit, customer, product, service, usage, marketing and target history.
-    Data is deterministic and paired with executable ground-truth evidence.
+    Synthetic demonstration warehouse with B2B SaaS history plus a governed
+    waste-management finance star schema through August 2026. The waste domain covers
+    contracts, customers, service lines, volume, budget, operating-cost components,
+    margin, cash collections and receivables. All data is deterministic, synthetic and
+    paired with executable ground-truth evidence.
   dialect: "sqlite"
   timezone: "UTC"
   fiscal_year_start_month: 1
@@ -159,6 +161,73 @@ tables:
       - {name: "support_tickets", type: "int", description: "Support tickets opened.", semantic_type: "measure", aggregation: "SUM"}
       - {name: "avg_csat", type: "float", description: "Average customer satisfaction score.", semantic_type: "measure", aggregation: "AVG"}
 
+  - name: "wm_customers"
+    description: >-
+      Synthetic waste-management customer master. It contains no real customer data and
+      is generated reproducibly for demonstrations. Use it for customer, region, segment,
+      state and industry breakdowns.
+    grain: "one waste-management customer account"
+    aliases: ["waste customers", "hauling customers", "municipal customers"]
+    columns:
+      - {name: "id", type: "int", description: "Synthetic customer identifier.", semantic_type: "identifier", is_primary_key: true}
+      - {name: "customer_name", type: "str", description: "Synthetic customer account name.", semantic_type: "dimension", aliases: ["account", "customer"]}
+      - {name: "customer_segment", type: "str", description: "Municipal, Commercial or Industrial segment.", semantic_type: "dimension", enum_values: ["Municipal", "Commercial", "Industrial"]}
+      - {name: "region", type: "str", description: "Operating region: Northeast, Southeast, Midwest or West.", semantic_type: "dimension", enum_values: ["Northeast", "Southeast", "Midwest", "West"]}
+      - {name: "state", type: "str", description: "Two-letter synthetic operating state.", semantic_type: "dimension"}
+      - {name: "industry", type: "str", description: "Customer industry.", semantic_type: "dimension"}
+      - {name: "credit_terms_days", type: "int", description: "Contractual payment terms in days.", semantic_type: "measure", aggregation: "AVG"}
+      - {name: "customer_since", type: "date", description: "Date the synthetic account began.", semantic_type: "temporal", is_temporal: true}
+      - {name: "account_status", type: "str", description: "Current account status.", semantic_type: "dimension"}
+
+  - name: "wm_contracts"
+    description: >-
+      Synthetic waste-service contract master. Each contract belongs to one customer and
+      one service line; prices are inputs used to generate contract-month financial facts.
+    grain: "one waste-service contract"
+    aliases: ["waste contracts", "service agreements"]
+    columns:
+      - {name: "id", type: "int", description: "Synthetic contract identifier.", semantic_type: "identifier", is_primary_key: true}
+      - {name: "customer_id", type: "int", description: "Owning waste customer.", semantic_type: "identifier", is_foreign_key: true, references: "wm_customers.id"}
+      - {name: "contract_name", type: "str", description: "Synthetic contract reference.", semantic_type: "dimension", aliases: ["contract"]}
+      - {name: "service_line", type: "str", description: "Residential, commercial, roll-off, recycling, or transfer and disposal service.", semantic_type: "dimension", aliases: ["line of business", "service"], enum_values: ["Residential Collection", "Commercial Collection", "Industrial Roll-Off", "Recycling", "Transfer & Disposal"]}
+      - {name: "pricing_model", type: "str", description: "Contract pricing approach.", semantic_type: "dimension"}
+      - {name: "contract_start_date", type: "date", description: "Contract start date.", semantic_type: "temporal", is_temporal: true}
+      - {name: "contract_end_date", type: "date", description: "Contract end date when expired.", semantic_type: "temporal", is_temporal: true, nullable: true}
+      - {name: "contract_status", type: "str", description: "Active or Expired status.", semantic_type: "dimension"}
+      - {name: "base_monthly_fee", type: "float", description: "Contract fixed monthly fee in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "price_per_ton", type: "float", description: "Contract rate per ton in USD.", semantic_type: "measure", aggregation: "AVG"}
+
+  - name: "wm_finance_monthly"
+    description: >-
+      Synthetic contract-month waste finance fact table through August 2026. Revenue,
+      budget, operating-cost components, profit, service volume and receivables share one
+      governed grain. Operating cost equals its five components; operating profit equals
+      revenue less operating cost; accounts receivable follows a monthly roll-forward.
+    grain: "one waste-service contract per complete month"
+    aliases: ["waste finance", "waste operations", "contract monthly finance"]
+    columns:
+      - {name: "id", type: "int", description: "Unique contract-month row.", semantic_type: "identifier", is_primary_key: true}
+      - {name: "contract_id", type: "int", description: "Waste-service contract.", semantic_type: "identifier", is_foreign_key: true, references: "wm_contracts.id"}
+      - {name: "month", type: "date", description: "First day of the complete reporting month.", semantic_type: "temporal", is_temporal: true, default_time_column: true}
+      - {name: "service_events", type: "int", description: "Completed pickups, hauls, or facility service events.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "collection_volume_tons", type: "float", description: "Collected material volume in short tons.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "disposal_volume_tons", type: "float", description: "Collected tons sent to disposal.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "recycling_volume_tons", type: "float", description: "Collected tons sent to recycling.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "revenue", type: "float", description: "Recognized waste-service revenue in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "revenue_budget", type: "float", description: "Approved waste-service revenue budget in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "fuel_cost", type: "float", description: "Fuel operating cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "labor_cost", type: "float", description: "Direct route and facility labor cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "disposal_cost", type: "float", description: "Tipping and third-party disposal cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "fleet_cost", type: "float", description: "Fleet maintenance and repair cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "other_operating_cost", type: "float", description: "Other direct operating cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "operating_cost", type: "float", description: "Sum of fuel, labor, disposal, fleet and other operating cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "operating_profit", type: "float", description: "Revenue less operating cost in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "invoices_billed", type: "float", description: "Invoices posted in the month in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "cash_collected", type: "float", description: "Cash applied to receivables in the month in USD.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "ar_balance", type: "float", description: "Ending accounts-receivable balance in USD; additive across contracts but not months.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "overdue_ar_balance", type: "float", description: "Ending receivables past contractual terms in USD; additive across contracts but not months.", semantic_type: "measure", aggregation: "SUM"}
+      - {name: "days_sales_outstanding", type: "float", description: "Contract-month receivables divided by billed revenue times 30 days.", semantic_type: "measure", aggregation: "AVG"}
+
 metrics:
   - {name: "net_revenue", description: "Recognized net revenue after discounts, excluding cancelled and refunded orders.", formula: "SUM(orders.net_revenue)", filters: "orders.status NOT IN ('cancelled', 'refunded')", unit: "USD", grain: "order", aliases: ["revenue", "sales", "recognized revenue"]}
   - {name: "gross_revenue", description: "Gross transaction value before discounts for non-cancelled orders.", formula: "SUM(orders.gross_revenue)", filters: "orders.status != 'cancelled'", unit: "USD", grain: "order", aliases: ["gross sales", "GMV"]}
@@ -206,8 +275,106 @@ metrics:
   - {name: "scorecard_support_tickets", description: "Support ticket volume from the governed scorecard.", formula: "SUM(business_kpi_monthly.support_tickets)", unit: "tickets", aliases: ["executive support"]}
   - {name: "scorecard_weighted_csat", description: "Ticket-weighted customer satisfaction from the governed scorecard.", formula: "SUM(business_kpi_monthly.avg_csat * business_kpi_monthly.support_tickets) / NULLIF(SUM(business_kpi_monthly.support_tickets), 0)", additivity: "non_additive", unit: "score", aliases: ["executive CSAT"]}
   - {name: "scorecard_marketing_spend", description: "Marketing investment from the governed scorecard.", formula: "SUM(business_kpi_monthly.marketing_spend)", unit: "USD", aliases: ["executive marketing spend"]}
+  - {name: "waste_revenue", description: "Recognized synthetic waste-service revenue at contract-month grain.", formula: "SUM(wm_finance_monthly.revenue)", unit: "USD", grain: "contract-month", aliases: ["waste revenue", "waste service revenue"]}
+  - {name: "waste_revenue_budget", description: "Approved synthetic waste-service revenue budget.", formula: "SUM(wm_finance_monthly.revenue_budget)", unit: "USD", grain: "contract-month", aliases: ["waste revenue budget", "waste budget"]}
+  - {name: "waste_revenue_variance", description: "Waste-service revenue less its approved budget.", formula: "SUM(wm_finance_monthly.revenue) - SUM(wm_finance_monthly.revenue_budget)", unit: "USD", aliases: ["waste budget variance", "waste revenue gap"]}
+  - {name: "waste_budget_attainment_pct", description: "Waste-service revenue divided by its approved budget.", formula: "100.0 * SUM(wm_finance_monthly.revenue) / NULLIF(SUM(wm_finance_monthly.revenue_budget), 0)", additivity: "non_additive", unit: "%", aliases: ["waste budget attainment"]}
+  - {name: "waste_operating_cost", description: "Total governed waste operating cost: fuel plus labor plus disposal plus fleet plus other operating cost.", formula: "SUM(wm_finance_monthly.operating_cost)", unit: "USD", aliases: ["waste operating costs", "waste costs"]}
+  - {name: "waste_operating_profit", description: "Waste revenue less governed operating cost.", formula: "SUM(wm_finance_monthly.operating_profit)", unit: "USD", aliases: ["waste operating profit"]}
+  - {name: "waste_operating_margin_pct", description: "Waste operating profit divided by waste revenue.", formula: "100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0)", additivity: "non_additive", unit: "%", aliases: ["operating margin", "waste margin", "waste operating margin"]}
+  - {name: "waste_fuel_cost", description: "Waste fleet fuel cost.", formula: "SUM(wm_finance_monthly.fuel_cost)", unit: "USD", aliases: ["fuel cost"]}
+  - {name: "waste_labor_cost", description: "Waste route and facility labor cost.", formula: "SUM(wm_finance_monthly.labor_cost)", unit: "USD", aliases: ["labor cost"]}
+  - {name: "waste_disposal_cost", description: "Waste disposal and tipping cost.", formula: "SUM(wm_finance_monthly.disposal_cost)", unit: "USD", aliases: ["disposal cost", "tipping fees"]}
+  - {name: "waste_fleet_cost", description: "Waste fleet maintenance and repair cost.", formula: "SUM(wm_finance_monthly.fleet_cost)", unit: "USD", aliases: ["fleet cost", "fleet maintenance"]}
+  - {name: "waste_other_operating_cost", description: "Other direct waste operating costs.", formula: "SUM(wm_finance_monthly.other_operating_cost)", unit: "USD"}
+  - {name: "waste_collection_volume", description: "Collected material volume.", formula: "SUM(wm_finance_monthly.collection_volume_tons)", unit: "tons", aliases: ["collection volume", "tons collected", "tonnage"]}
+  - {name: "waste_disposal_volume", description: "Collected volume sent to disposal.", formula: "SUM(wm_finance_monthly.disposal_volume_tons)", unit: "tons", aliases: ["disposal volume", "disposed tons"]}
+  - {name: "waste_recycling_volume", description: "Collected volume sent to recycling.", formula: "SUM(wm_finance_monthly.recycling_volume_tons)", unit: "tons", aliases: ["recycling volume", "recycled tons"]}
+  - {name: "waste_revenue_per_ton", description: "Waste revenue divided by collection volume.", formula: "SUM(wm_finance_monthly.revenue) / NULLIF(SUM(wm_finance_monthly.collection_volume_tons), 0)", additivity: "non_additive", unit: "USD/ton", aliases: ["revenue per ton"]}
+  - {name: "waste_service_events", description: "Completed waste pickups, hauls, or facility service events.", formula: "SUM(wm_finance_monthly.service_events)", unit: "events", aliases: ["service events", "hauls", "pickups"]}
+  - {name: "waste_cash_collected", description: "Cash applied against waste customer receivables.", formula: "SUM(wm_finance_monthly.cash_collected)", unit: "USD", aliases: ["cash collections"]}
+  - {name: "waste_ar_balance", description: "Ending waste accounts-receivable balance; sum across contracts for a single selected month and do not sum across time.", formula: "SUM(wm_finance_monthly.ar_balance)", additivity: "semi_additive", unit: "USD", aliases: ["accounts receivable", "AR balance", "receivables"]}
+  - {name: "waste_overdue_ar", description: "Ending overdue waste accounts-receivable balance; do not sum across months.", formula: "SUM(wm_finance_monthly.overdue_ar_balance)", additivity: "semi_additive", unit: "USD", aliases: ["overdue receivables", "past due AR"]}
+  - {name: "waste_dso", description: "Average contract-month days sales outstanding.", formula: "AVG(wm_finance_monthly.days_sales_outstanding)", additivity: "non_additive", unit: "days", aliases: ["DSO", "days sales outstanding"]}
 
 analysis_profiles:
+  - name: "waste_revenue_margin_review"
+    description: "Governed waste-service revenue and operating-margin review; all values are computed from contract-month facts."
+    aliases: ["revenue and operating margin", "revenue & operating margin", "waste revenue and margin"]
+    measures: ["waste_revenue", "waste_operating_margin_pct"]
+    time_dimension: "month"
+    operations: ["descriptive", "comparison"]
+    question_type: "aggregation"
+  - name: "waste_finance_executive_review"
+    description: "Cross-functional waste-finance review of actuals, budget, margin, volume, cost mix and collections."
+    aliases: ["waste finance summary", "waste-management finance summary", "waste business review"]
+    measures:
+      - "waste_revenue"
+      - "waste_revenue_budget"
+      - "waste_revenue_variance"
+      - "waste_budget_attainment_pct"
+      - "waste_operating_cost"
+      - "waste_operating_profit"
+      - "waste_operating_margin_pct"
+      - "waste_collection_volume"
+      - "waste_revenue_per_ton"
+      - "waste_cash_collected"
+      - "waste_ar_balance"
+      - "waste_dso"
+    time_dimension: "month"
+    time_bucket: "month"
+    operations: ["executive_summary", "descriptive", "trend", "anomaly"]
+  - name: "waste_cost_driver_review"
+    description: "Observed cost-component and margin contributors by region; association does not establish causation."
+    aliases: ["driving our margin decline", "waste cost drivers", "what is driving waste margin"]
+    measures:
+      - "waste_revenue"
+      - "waste_operating_margin_pct"
+      - "waste_fuel_cost"
+      - "waste_labor_cost"
+      - "waste_disposal_cost"
+      - "waste_fleet_cost"
+      - "waste_other_operating_cost"
+    dimensions: ["region"]
+    time_dimension: "month"
+    time_bucket: "month"
+    operations: ["descriptive", "correlation", "contribution", "driver_analysis"]
+    question_type: "diagnostic"
+  - name: "waste_customer_profitability"
+    description: "Ranks synthetic waste customers by observed operating margin with revenue and profit context."
+    aliases: ["least profitable waste customers", "lowest margin waste customers", "waste customer profitability"]
+    measures: ["waste_revenue", "waste_operating_profit", "waste_operating_margin_pct"]
+    dimensions: ["customer_name"]
+    operations: ["descriptive", "contribution"]
+    question_type: "ranking"
+    order_by: "waste_operating_margin_pct"
+    order_direction: "asc"
+    limit: 20
+  - name: "waste_contract_profitability"
+    description: "Ranks synthetic waste-service contracts by observed operating margin with revenue and profit context."
+    aliases: ["least profitable waste contracts", "lowest margin waste contracts", "waste contract profitability"]
+    measures: ["waste_revenue", "waste_operating_profit", "waste_operating_margin_pct"]
+    dimensions: ["contract_name"]
+    operations: ["descriptive", "contribution"]
+    question_type: "ranking"
+    order_by: "waste_operating_margin_pct"
+    order_direction: "asc"
+    limit: 20
+  - name: "waste_revenue_forecast"
+    description: "Governed monthly waste-service revenue history used for statistical projection."
+    aliases: ["forecast waste revenue", "waste revenue forecast", "project waste revenue"]
+    measures: ["waste_revenue"]
+    time_dimension: "month"
+    time_bucket: "month"
+    operations: ["descriptive", "trend", "forecast"]
+  - name: "waste_receivables_review"
+    description: "Ending accounts receivable, overdue balance, cash collections and DSO at valid monthly grain."
+    aliases: ["waste receivables", "waste accounts receivable", "waste collections review"]
+    measures: ["waste_ar_balance", "waste_overdue_ar", "waste_cash_collected", "waste_dso"]
+    time_dimension: "month"
+    time_bucket: "month"
+    operations: ["descriptive", "trend", "anomaly"]
+    question_type: "time_series"
   - name: "recognized_revenue_forecast"
     description: "Governed recognized-revenue history used for forward projections."
     aliases: ["forecast revenue", "revenue forecast", "project revenue"]
@@ -254,8 +421,14 @@ joins:
   - {from_table: "support_tickets", to_table: "customers", on: "support_tickets.customer_id = customers.id", join_type: "LEFT", cardinality: "many_to_one", description: "Each ticket belongs to one customer."}
   - {from_table: "support_tickets", to_table: "orders", on: "support_tickets.order_id = orders.id", join_type: "LEFT", cardinality: "many_to_one", description: "A ticket may reference one order."}
   - {from_table: "customer_monthly_metrics", to_table: "customers", on: "customer_monthly_metrics.customer_id = customers.id", join_type: "LEFT", cardinality: "many_to_one", description: "Each health snapshot belongs to one customer."}
+  - {from_table: "wm_finance_monthly", to_table: "wm_contracts", on: "wm_finance_monthly.contract_id = wm_contracts.id", join_type: "LEFT", cardinality: "many_to_one", description: "Each contract-month financial fact belongs to exactly one governed waste-service contract."}
+  - {from_table: "wm_contracts", to_table: "wm_customers", on: "wm_contracts.customer_id = wm_customers.id", join_type: "LEFT", cardinality: "many_to_one", description: "Each waste-service contract belongs to exactly one synthetic customer account."}
 
 glossary:
+  - {term: "complete waste history", description: "All complete synthetic waste reporting months from 2023-09-01 through 2026-08-31.", sql_filter: "wm_finance_monthly.month >= '2023-09-01' AND wm_finance_monthly.month < '2026-09-01'", applies_to_table: "wm_finance_monthly", aliases: ["complete waste months"]}
+  - {term: "2026 waste YTD", description: "Eight complete waste reporting months from January through August 2026.", sql_filter: "wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-09-01'", applies_to_table: "wm_finance_monthly", aliases: ["waste year to date"]}
+  - {term: "active waste contract", description: "A waste-service contract whose current status is Active.", sql_filter: "wm_contracts.contract_status = 'Active'", applies_to_table: "wm_contracts", aliases: ["active contract"]}
+  - {term: "West waste region", description: "Synthetic West operating region.", sql_filter: "wm_customers.region = 'West'", applies_to_table: "wm_customers", aliases: ["waste West"]}
   - {term: "recognized order", description: "An order that is not cancelled or refunded.", sql_filter: "orders.status NOT IN ('cancelled', 'refunded')", applies_to_table: "orders", aliases: ["completed business", "valid order"]}
   - {term: "enterprise customer", description: "A customer on the Enterprise tier.", sql_filter: "customers.tier = 'Enterprise'", applies_to_table: "customers", aliases: ["enterprise account", "enterprise client"]}
   - {term: "active account", description: "An account whose current status is Active.", sql_filter: "customers.account_status = 'Active'", applies_to_table: "customers", aliases: ["live customer"]}
@@ -266,6 +439,46 @@ glossary:
   - {term: "recent six months", description: "The six complete months from 2026-03-01 through 2026-08-31 in this fixed demo.", sql_filter: "orders.order_date >= '2026-03-01' AND orders.order_date < '2026-09-01'", applies_to_table: "orders", aliases: ["latest six complete months"]}
 
 examples:
+  - question: "What were waste revenue and operating margin by month in 2026?"
+    intent_type: "time_series"
+    sql: |
+      SELECT month AS period, SUM(revenue) AS waste_revenue,
+             100.0*SUM(operating_profit)/NULLIF(SUM(revenue),0) AS waste_operating_margin_pct
+      FROM wm_finance_monthly
+      WHERE month>='2026-01-01' AND month<'2026-09-01'
+      GROUP BY month ORDER BY month
+    description: "Observed monthly actuals at the governed contract-month grain."
+  - question: "Which regions contributed most to the 2026 waste margin change?"
+    intent_type: "diagnostic"
+    sql: |
+      SELECT c.region, SUM(f.revenue) AS waste_revenue,
+             SUM(f.fuel_cost) AS waste_fuel_cost, SUM(f.labor_cost) AS waste_labor_cost,
+             SUM(f.disposal_cost) AS waste_disposal_cost, SUM(f.fleet_cost) AS waste_fleet_cost,
+             100.0*SUM(f.operating_profit)/NULLIF(SUM(f.revenue),0) AS waste_operating_margin_pct
+      FROM wm_finance_monthly f
+      JOIN wm_contracts k ON k.id=f.contract_id
+      JOIN wm_customers c ON c.id=k.customer_id
+      WHERE f.month>='2026-01-01' AND f.month<'2026-09-01'
+      GROUP BY c.region ORDER BY waste_operating_margin_pct
+    description: "Observed regional contributors; the output must not be described as causal."
+  - question: "Show waste revenue, margin and collection tons by service line."
+    intent_type: "aggregation"
+    sql: |
+      SELECT c.service_line, SUM(f.revenue) AS waste_revenue,
+             100.0*SUM(f.operating_profit)/NULLIF(SUM(f.revenue),0) AS waste_operating_margin_pct,
+             SUM(f.collection_volume_tons) AS waste_collection_volume
+      FROM wm_finance_monthly f JOIN wm_contracts c ON c.id=f.contract_id
+      GROUP BY c.service_line ORDER BY waste_revenue DESC
+  - question: "Which waste customers have the largest overdue receivables in August 2026?"
+    intent_type: "ranking"
+    sql: |
+      SELECT c.customer_name, SUM(f.overdue_ar_balance) AS waste_overdue_ar,
+             AVG(f.days_sales_outstanding) AS waste_dso
+      FROM wm_finance_monthly f
+      JOIN wm_contracts k ON k.id=f.contract_id
+      JOIN wm_customers c ON c.id=k.customer_id
+      WHERE f.month='2026-08-01'
+      GROUP BY c.customer_name ORDER BY waste_overdue_ar DESC LIMIT 10
   - question: "What is recognized revenue and profit by month for the last 12 months?"
     intent_type: "time_series"
     sql: |

@@ -1,0 +1,58 @@
+{
+  "session_id": "0eb7b7f2-5fed-47f3-a3e0-78f3506135d0",
+  "turn_id": 3,
+  "timestamp": "2026-09-13T12:38:02.108831Z",
+  "answer": null,
+  "sql": null,
+  "row_count": null,
+  "is_truncated": false,
+  "execution_time_ms": null,
+  "query_result": null,
+  "visualisation": null,
+  "supplementary_visualisations": [],
+  "key_finding": null,
+  "key_findings_bullets": [],
+  "drivers": [],
+  "anomaly_descriptions": [],
+  "suggested_questions": [],
+  "correlation_result": null,
+  "anomaly_result": null,
+  "forecast_result": null,
+  "data_quality": null,
+  "explainability": null,
+  "generated_insights": null,
+  "statistical_analysis": null,
+  "error": {
+    "stage": "intent_extraction",
+    "error_type": "ambiguous",
+    "message": "The question needs clarification before it can be answered.",
+    "user_message": "Which two periods should I compare? For example, ask for 'this month vs last month' or 'this year vs last year'.",
+    "is_retryable": true,
+    "clarification_needed": "Which two periods should I compare? For example, ask for 'this month vs last month' or 'this year vs last year'."
+  },
+  "question_type": null,
+  "complexity_tier": null,
+  "investigation_steps": null,
+  "evidence_nodes": [],
+  "tables_used": [],
+  "critic_score": null,
+  "pipeline_duration_ms": 3047.5239000516012,
+  "context_snapshot": {
+    "current_measures": [
+      "waste_revenue",
+      "waste_operating_margin_pct"
+    ],
+    "current_dimensions": [
+      "region"
+    ],
+    "accumulated_filters": [
+      "West waste region"
+    ],
+    "current_time_range": "2026-01-01 to 2026-12-31",
+    "current_tables": [
+      "wm_finance_monthly",
+      "wm_contracts",
+      "wm_customers"
+    ]
+  }
+}

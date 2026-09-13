@@ -225,14 +225,31 @@ class PipelineOrchestrator:
 
             stage = PipelineStage.INTENT_EXTRACTION
             with _tracer.start_as_current_span("intent_extraction") as span:
-                intent = await self._intent_extractor.extract(question, schema_ctx, context_str)
-                intent = self._normalise_explicit_comparison(intent, question)
+                try:
+                    intent = await self._intent_extractor.extract(
+                        question, schema_ctx, context_str
+                    )
+                except Exception as extraction_error:  # noqa: BLE001
+                    logger.warning(
+                        "Intent model unavailable; applying governed semantic fallback: %s",
+                        type(extraction_error).__name__,
+                    )
+                    intent = self._intent_normalizer.fallback(
+                        question,
+                        schema_ctx,
+                        state.active_context,
+                    )
                 intent = self._intent_normalizer.normalise(
                     intent,
                     question,
                     schema_ctx,
                     state.active_context,
                 )
+                intent = self._normalise_explicit_comparison(intent, question)
+                intent = self._resolve_contextual_comparison(
+                    intent, question, state.active_context
+                )
+                intent = self._inherit_active_context(intent, state.active_context)
                 span.set_attribute("question_type", intent.question_type.value)
                 span.set_attribute("confidence", intent.confidence)
                 span.set_attribute("measures", list(intent.measures))
@@ -312,6 +329,7 @@ class PipelineOrchestrator:
             if (
                 _complexity_tier in ("complex", "very_complex")
                 and self._investigation_agent is not None
+                and intent.question_type == QuestionType.DIAGNOSTIC
                 and not _deterministic_follow_up
                 and not _deterministic_comparison
                 and not intent.analysis_operations
@@ -1150,35 +1168,19 @@ class PipelineOrchestrator:
 
         primary_start, primary_end = primary_window
         comparison_start, comparison_end = comparison_window
-        # This comparison shape has a governed absolute window and uses Europe
-        # as a filter.  Discard model-proposed time filters/dimensions so a
-        # duplicate phrase such as "latest six complete months" cannot resolve
-        # to an unrelated table or create an accidental GROUP BY.
+        # Preserve the semantic layer's resolved measure, time dimension,
+        # dimensions and categorical filters. Only model-proposed time-filter
+        # fragments are superseded by the deterministic absolute windows.
         time_entities = {"date", "month", "order_date", "period", "comparison_period"}
         filters = [
             item
             for item in intent.filters
-            if item.entity.lower() not in {"region", *time_entities}
+            if item.entity.lower() not in time_entities
             and (item.glossary_term or "").lower() != "recent six months"
         ]
-        if "europe" in lowered:
-            filters.append(
-                SemanticFilter(
-                    entity="region",
-                    operator=FilterOperator.EQUALS,
-                    value="Europe",
-                )
-            )
         return intent.model_copy(
             update={
                 "question_type": QuestionType.COMPARISON,
-                "measures": (
-                    ["net_revenue"]
-                    if any(term in lowered for term in ("revenue", "sales"))
-                    else (intent.measures or ["net_revenue"])
-                ),
-                "dimensions": [],
-                "time_dimension": "order_date",
                 "time_range": TimeRange(
                     range_type=TimeRangeType.ABSOLUTE,
                     start_date=primary_start.isoformat(),
@@ -1296,25 +1298,134 @@ class PipelineOrchestrator:
                 current_measures=list(intent.measures),
                 current_dimensions=list(intent.dimensions),
                 accumulated_filters=new_filters,
+                semantic_filters=list(intent.filters),
                 current_time_range=self._time_range_label(intent.time_range),
+                time_range=intent.time_range,
+                time_comparison=intent.time_comparison,
                 current_tables=tables_used,
                 last_successful_sql=sql,
             )
 
         accumulated_filters = list(prior.accumulated_filters)
+        semantic_filters = list(prior.semantic_filters)
         for label in new_filters:
             if label not in accumulated_filters:
                 accumulated_filters.append(label)
+        for filt in intent.filters:
+            if filt not in semantic_filters:
+                semantic_filters.append(filt)
 
         return ActiveContext(
             current_measures=list(intent.measures) or list(prior.current_measures),
             current_dimensions=list(intent.dimensions) or list(prior.current_dimensions),
             accumulated_filters=accumulated_filters,
+            semantic_filters=semantic_filters,
             current_time_range=(
                 self._time_range_label(intent.time_range) or prior.current_time_range
             ),
+            time_range=intent.time_range or prior.time_range,
+            time_comparison=intent.time_comparison or prior.time_comparison,
             current_tables=tables_used,
             last_successful_sql=sql,
+        )
+
+    @staticmethod
+    def _resolve_contextual_comparison(
+        intent: AnalyticalIntent,
+        question: str,
+        prior: ActiveContext,
+    ) -> AnalyticalIntent:
+        """Resolve "same months last year" from typed prior-turn state."""
+        from datetime import date
+
+        lowered = question.casefold()
+        if (
+            not re.search(r"\b(compare|comparison|versus|vs\.?|against)\b", lowered)
+            or prior.time_range is None
+            or prior.time_range.range_type != TimeRangeType.ABSOLUTE
+            or prior.time_range.start_date is None
+            or prior.time_range.end_date is None
+        ):
+            return intent
+
+        explicit_year = re.search(r"\b(?:in|during|from)\s+(20\d{2})\b", lowered)
+        is_prior_year = bool(re.search(r"\b(?:last|prior|previous) year\b", lowered))
+        is_same_window = bool(re.search(r"\bsame (?:month|months|period|window)\b", lowered))
+        if explicit_year is None and not is_prior_year:
+            return intent
+        if not is_same_window and not is_prior_year:
+            return intent
+
+        primary_start = date.fromisoformat(prior.time_range.start_date[:10])
+        primary_end = date.fromisoformat(prior.time_range.end_date[:10])
+        current_month = datetime.now(tz=UTC).date().replace(day=1)
+        if primary_start < current_month < primary_end:
+            primary_end = current_month
+
+        comparison_year = (
+            int(explicit_year.group(1)) if explicit_year is not None else primary_start.year - 1
+        )
+        year_delta = comparison_year - primary_start.year
+
+        def _shift_year(value: date) -> date:
+            try:
+                return value.replace(year=value.year + year_delta)
+            except ValueError:
+                return value.replace(year=value.year + year_delta, day=28)
+
+        comparison_start = _shift_year(primary_start)
+        comparison_end = _shift_year(primary_end)
+        return intent.model_copy(
+            update={
+                "question_type": QuestionType.COMPARISON,
+                "references_prior_turn": True,
+                "time_range": TimeRange(
+                    range_type=TimeRangeType.ABSOLUTE,
+                    start_date=primary_start.isoformat(),
+                    end_date=primary_end.isoformat(),
+                    bucket=prior.time_range.bucket,
+                ),
+                "time_comparison": TimeComparison(
+                    comparison_period=RelativePeriod.LAST_YEAR,
+                    comparison_label=(
+                        f"Same observed months in {comparison_year}"
+                    ),
+                    comparison_start_date=comparison_start.isoformat(),
+                    comparison_end_date=comparison_end.isoformat(),
+                ),
+                "clarification_question": None,
+                "confidence": max(intent.confidence, 0.9),
+            }
+        )
+
+    @staticmethod
+    def _inherit_active_context(
+        intent: AnalyticalIntent,
+        prior: ActiveContext,
+    ) -> AnalyticalIntent:
+        """Reapply typed state to a follow-up before query planning.
+
+        Conversation text remains useful to the language model, but it is not a
+        reliable execution contract.  Typed metrics, filters, and time windows
+        are therefore merged deterministically whenever the extracted intent
+        explicitly references the prior turn.
+        """
+        if not intent.references_prior_turn:
+            return intent
+
+        filters = list(prior.semantic_filters)
+        for filt in intent.filters:
+            if filt not in filters:
+                filters.append(filt)
+
+        return intent.model_copy(
+            update={
+                "measures": list(intent.measures) or list(prior.current_measures),
+                "dimensions": list(intent.dimensions) or list(prior.current_dimensions),
+                "filters": filters,
+                "time_range": intent.time_range or prior.time_range,
+                "time_comparison": intent.time_comparison or prior.time_comparison,
+            }
         )
 
     # ── Persistence ──────────────────────────────────────────────────────────

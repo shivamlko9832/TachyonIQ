@@ -117,6 +117,36 @@ class TestDeterministicSelection:
         assert viz.formatted_value == "$9.7M"
         assert viz.unit == "USD"
 
+    async def test_one_row_multiple_measures_returns_kpi_group(
+        self, generator: VisualisationGenerator, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            [
+                ColumnMeta(name="waste_revenue", data_type="float", unit="USD"),
+                ColumnMeta(
+                    name="waste_operating_margin_pct", data_type="float", unit="%"
+                ),
+            ],
+            [[268_403_459.60, 36.470458]],
+        )
+        intent = AnalyticalIntent(
+            question_type=QuestionType.AGGREGATION,
+            measures=["waste_revenue", "waste_operating_margin_pct"],
+            raw_question="What was revenue and operating margin in 2026?",
+        )
+        analysed = analyser.analyse(result, intent)
+
+        primary = await generator.generate(analysed, intent)
+        supplementary = await generator.generate_supplementary(analysed, intent)
+
+        assert isinstance(primary, KpiSpec)
+        assert primary.label == "Waste Revenue"
+        assert primary.formatted_value == "$268.4M"
+        assert len(supplementary) == 1
+        assert isinstance(supplementary[0], KpiSpec)
+        assert supplementary[0].label == "Waste Operating Margin Pct"
+        assert supplementary[0].formatted_value == "36.47%"
+
     async def test_time_series_produces_line_chart(
         self, generator: VisualisationGenerator, analyser: ResultAnalyser
     ) -> None:
@@ -589,7 +619,7 @@ class TestMultiVizPlanner:
     async def test_never_raises_on_empty_result(
         self, generator: VisualisationGenerator, analyser: ResultAnalyser
     ) -> None:
-        """generate_supplementary() returns [] for a result with < 2 rows — no exception."""
+        """A one-row, one-measure result has no supplementary card."""
         result = _result(
             columns=[ColumnMeta(name="revenue", data_type="float")],
             rows=[[100.0]],  # only 1 row

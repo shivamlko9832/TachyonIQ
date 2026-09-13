@@ -30,7 +30,7 @@ def _mock_analysed(
     from uada.models.result import NumericSummary, TrendAnalysis, TrendDirection
 
     a = MagicMock()
-    a.row_count = row_count
+    a.query_result.row_count = row_count
     a.key_finding = key_finding
     a.key_findings_bullets = findings_bullets or ["Total revenue: £100k."]
     a.drivers = drivers or ["Seasonal demand increase."]

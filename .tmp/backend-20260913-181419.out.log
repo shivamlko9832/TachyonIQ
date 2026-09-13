@@ -1,0 +1,35 @@
+INFO:     127.0.0.1:58303 - "GET /health HTTP/1.1" 200 OK
+18:16:01.153 agent run
+18:16:01.165   chat gpt-4o
+18:16:02.975 agent run
+18:16:02.977   chat gpt-4o
+INFO:     127.0.0.1:58315 - "POST /query HTTP/1.1" 200 OK
+18:16:06.125 agent run
+18:16:06.131   chat gpt-4o
+18:16:08.436 agent run
+18:16:08.438   chat gpt-4o
+18:16:09.966 agent run
+18:16:09.968   chat gpt-4o
+18:16:12.200 agent run
+18:16:12.200   chat gpt-4o
+18:16:13.445 agent run
+18:16:13.445   chat gpt-4o
+INFO:     127.0.0.1:58322 - "POST /query HTTP/1.1" 200 OK
+18:16:18.051 agent run
+18:16:18.051   chat gpt-4o
+18:16:21.936 agent run
+18:16:21.936   chat gpt-4o
+18:16:23.913 agent run
+18:16:23.913   chat gpt-4o
+18:16:39.004 agent run
+18:16:39.004   chat gpt-4o
+INFO:     127.0.0.1:58340 - "POST /query HTTP/1.1" 200 OK
+18:16:42.327 agent run
+18:16:42.335   chat gpt-4o
+18:16:51.436 agent run
+18:16:51.436   chat gpt-4o
+18:16:53.039 agent run
+18:16:53.041   chat gpt-4o
+18:16:56.318 agent run
+18:16:56.318   chat gpt-4o
+INFO:     127.0.0.1:58360 - "POST /query HTTP/1.1" 200 OK

@@ -1,0 +1,19 @@
+
+> tachyoniq-frontend@0.1.0 dev
+> next dev -p 3001
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3001
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1709ms
+ ✓ Compiled /api/backend/[...path] in 259ms (56 modules)
+ GET /api/backend/health 200 in 554ms
+ POST /api/backend/query 200 in 4852ms
+ POST /api/backend/query 404 in 37ms
+ POST /api/backend/query 200 in 7721ms
+ POST /api/backend/query 200 in 11769ms
+ POST /api/backend/query 200 in 15579ms
+ POST /api/backend/query 200 in 9574ms
+ POST /api/backend/query 200 in 6970ms

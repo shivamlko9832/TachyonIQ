@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 from uada.analytics.statistical_engine import StatisticalEngine
+from uada.models.conversation import ActiveContext
 from uada.models.intent import (
+    AnalysisOperation,
     AnalyticalIntent,
     FilterOperator,
     OrderClause,
@@ -326,8 +329,8 @@ def test_scalar_metric_narrative_uses_governed_result_and_semantic_unit(
     narrative = engine.narrative(report, intent, plan)
 
     assert narrative == (
-        "Revenue for this month is $9,698,813.69. It was calculated from the governed "
-        "metric definition and the validated aggregate result."
+        "Governed results for this month: revenue is $9,698,813.69. Each value was "
+        "calculated from its semantic metric definition and the validated aggregate result."
     )
     assert report["aggregates"]["scorecard_revenue"]["value"] == 9_698_813.69
 
@@ -339,7 +342,9 @@ def test_explicit_comparison_replaces_model_time_noise() -> None:
     )
     extracted = _base_intent(question).model_copy(
         update={
-            "dimensions": ["comparison_period"],
+            "measures": ["net_revenue"],
+            "dimensions": [],
+            "time_dimension": "order_date",
             "filters": [
                 SemanticFilter(
                     entity="month",
@@ -352,6 +357,11 @@ def test_explicit_comparison_replaces_model_time_noise() -> None:
                     operator=FilterOperator.EQUALS,
                     value="Enterprise",
                 ),
+                SemanticFilter(
+                    entity="region",
+                    operator=FilterOperator.EQUALS,
+                    value="Europe",
+                ),
             ],
         }
     )
@@ -363,12 +373,90 @@ def test_explicit_comparison_replaces_model_time_noise() -> None:
     assert normalized.question_type == QuestionType.COMPARISON
     assert normalized.measures == ["net_revenue"]
     assert normalized.dimensions == []
+    assert normalized.time_dimension == "order_date"
     assert normalized.time_range is not None
     assert normalized.time_comparison is not None
     assert [(item.entity, item.value) for item in normalized.filters] == [
         ("tier", "Enterprise"),
         ("region", "Europe"),
     ]
+
+
+def test_multi_measure_scalar_narrative_reports_every_governed_value(
+    manager: SCLManager,
+) -> None:
+    question = "What was our revenue and operating margin in 2026?"
+    intent = IntentNormalizer(manager).fallback(question, _context())
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    query_result = QueryResult(
+        columns=[
+            ColumnMeta(name="waste_revenue", data_type="float", unit="USD"),
+            ColumnMeta(name="waste_operating_margin_pct", data_type="float", unit="%"),
+        ],
+        rows=[[268_403_459.60, 36.470458]],
+        row_count=1,
+        executed_sql="SELECT governed waste metrics",
+        execution_time_ms=1.0,
+        database_dialect="sqlite",
+    )
+    analysed = AnalysedResult(query_result=query_result)
+    engine = StatisticalEngine()
+    report = engine.analyse(analysed, intent, plan)
+
+    narrative = engine.narrative(report, intent, plan)
+
+    assert narrative is not None
+    assert "revenue is $268,403,459.60" in narrative
+    assert "operating margin pct is 36.47%" in narrative
+    expected_end = min(date(2027, 1, 1), date.today().replace(day=1)) - timedelta(days=1)
+    assert f"2026-01-01 through {expected_end.isoformat()}" in narrative
+
+
+def test_unresolved_model_time_bucket_falls_back_to_governed_date_column(
+    manager: SCLManager,
+) -> None:
+    intent = AnalyticalIntent(
+        question_type=QuestionType.COMPARISON,
+        measures=["net_revenue"],
+        time_dimension="month",
+        time_range=TimeRange(
+            range_type=TimeRangeType.RELATIVE,
+            relative_period=RelativePeriod.THIS_YEAR,
+        ),
+        time_comparison=TimeComparison(
+            comparison_period=RelativePeriod.LAST_YEAR,
+            comparison_label="Last year",
+        ),
+        raw_question="Compare revenue this year vs last year.",
+    )
+
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+
+    assert plan.primary_table.table_name == "orders"
+    assert plan.time_resolution is not None
+    assert plan.time_resolution.time_column == "orders.order_date"
+    assert "orders.month" not in plan.time_resolution.filter_sql
+
+
+def test_explicit_waste_comparison_keeps_waste_semantics(
+    manager: SCLManager,
+) -> None:
+    question = "Compare waste revenue from January to August 2026 with January to August 2025."
+    intent = IntentNormalizer(manager).fallback(question, _context())
+
+    normalized = PipelineOrchestrator._normalise_explicit_comparison(intent, question)
+
+    assert normalized.measures == ["waste_revenue"]
+    assert "net_revenue" not in normalized.measures
+    assert normalized.time_range is not None
+    assert normalized.time_range.start_date == "2026-01-01"
+    assert normalized.time_range.end_date == "2026-09-01"
+    assert normalized.time_comparison is not None
+    assert normalized.time_comparison.comparison_start_date == "2025-01-01"
+    assert normalized.time_comparison.comparison_end_date == "2025-09-01"
+    plan = QueryPlanner(manager, strict_semantics=True).plan(normalized, _context())
+    assert plan.time_resolution is not None
+    assert plan.time_resolution.time_column == "wm_finance_monthly.month"
 
 
 def test_governed_profile_discards_invented_filters(manager: SCLManager) -> None:
@@ -446,3 +534,337 @@ def test_governed_profile_replaces_invented_planning_fields(
     )
     assert plan.primary_table.table_name == "business_kpi_monthly"
     assert plan.joins == []
+
+
+def test_waste_revenue_margin_profile_executes_only_governed_metrics(
+    manager: SCLManager,
+) -> None:
+    question = "What was our revenue and operating margin in 2026?"
+    extracted = _base_intent(question).model_copy(
+        update={
+            "time_range": TimeRange(
+                range_type=TimeRangeType.ABSOLUTE,
+                start_date="2026-01-01",
+                end_date="2026-09-01",
+            )
+        }
+    )
+    intent = IntentNormalizer(manager).normalise(extracted, question, _context())
+
+    assert intent.analysis_profile == "waste_revenue_margin_review"
+    assert intent.measures == ["waste_revenue", "waste_operating_margin_pct"]
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    assert plan.primary_table.table_name == "wm_finance_monthly"
+    assert plan.joins == []
+
+    sql = SQLGenerator._deterministic_analysis_sql(plan)
+    assert sql is not None
+    assert "wm_finance_monthly.revenue" in sql
+    assert "orders.net_revenue" not in sql
+    with sqlite3.connect(DEMO_DB) as connection:
+        revenue, margin = connection.execute(sql).fetchone()
+    assert revenue > 0
+    assert 0 < margin < 100
+
+
+def test_waste_year_aggregate_drops_unrequested_model_time_bucket(
+    manager: SCLManager,
+) -> None:
+    question = "What was our revenue and operating margin in 2026?"
+    extracted = _base_intent(question).model_copy(
+        update={
+            "time_range": TimeRange(
+                range_type=TimeRangeType.ABSOLUTE,
+                start_date="2026-01-01",
+                end_date="2027-01-01",
+                bucket=TimeBucket.MONTH,
+            )
+        }
+    )
+
+    intent = IntentNormalizer(manager).normalise(extracted, question, _context())
+
+    assert intent.time_range is not None
+    assert intent.time_range.bucket is None
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    sql = SQLGenerator._deterministic_analysis_sql(plan)
+    assert sql is not None
+    assert "GROUP BY" not in sql
+
+
+def test_waste_cost_driver_profile_uses_declared_multihop_join(
+    manager: SCLManager,
+) -> None:
+    question = "What is driving our margin decline?"
+    intent = IntentNormalizer(manager).normalise(
+        _base_intent(question), question, _context()
+    )
+
+    assert intent.analysis_profile == "waste_cost_driver_review"
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    assert plan.primary_table.table_name == "wm_finance_monthly"
+    assert [(join.from_table, join.to_table) for join in plan.joins] == [
+        ("wm_finance_monthly", "wm_contracts"),
+        ("wm_contracts", "wm_customers"),
+    ]
+    assert plan.dimensions[0].sql_expression == "wm_customers.region"
+
+    sql = SQLGenerator._deterministic_analysis_sql(plan)
+    assert sql is not None
+    with sqlite3.connect(DEMO_DB) as connection:
+        rows = connection.execute(sql).fetchall()
+    assert len(rows) >= 100
+
+
+def test_qualified_dimension_from_model_is_validated_against_semantic_contract(
+    manager: SCLManager,
+) -> None:
+    intent = AnalyticalIntent(
+        question_type=QuestionType.AGGREGATION,
+        measures=["net_revenue"],
+        dimensions=["customers.tier"],
+        raw_question="Show revenue for enterprise customers",
+    )
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+
+    assert plan.dimensions[0].sql_expression == "customers.tier"
+    assert [(join.from_table, join.to_table) for join in plan.joins] == [
+        ("orders", "customers")
+    ]
+
+
+def test_governed_intent_fallback_executes_waste_profile(
+    manager: SCLManager,
+) -> None:
+    intent = IntentNormalizer(manager).fallback(
+        "What was our revenue and operating margin in 2026?",
+        _context(),
+    )
+
+    assert intent.analysis_profile == "waste_revenue_margin_review"
+    assert intent.measures == ["waste_revenue", "waste_operating_margin_pct"]
+    assert intent.time_range is not None
+    assert intent.time_range.start_date == "2026-01-01"
+    assert AnalysisOperation.DESCRIPTIVE in intent.analysis_operations
+
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    sql = SQLGenerator._deterministic_analysis_sql(plan)
+    assert sql is not None
+    with sqlite3.connect(DEMO_DB) as connection:
+        revenue, margin = connection.execute(sql).fetchone()
+    assert revenue == pytest.approx(268_403_459.60, abs=0.02)
+    assert margin == pytest.approx(36.4705, abs=0.001)
+
+
+def test_governed_intent_fallback_carries_context_and_adds_west_filter(
+    manager: SCLManager,
+) -> None:
+    prior = ActiveContext(
+        current_measures=["waste_revenue", "waste_operating_margin_pct"],
+        current_dimensions=["region"],
+    )
+    intent = IntentNormalizer(manager).fallback("Now only show the West", _context(), prior)
+
+    assert intent.references_prior_turn is True
+    assert intent.measures == prior.current_measures
+    assert intent.dimensions == prior.current_dimensions
+    assert [(item.entity, item.value) for item in intent.filters] == [("region", "West")]
+
+
+def test_governed_intent_fallback_refuses_unknown_metric(
+    manager: SCLManager,
+) -> None:
+    intent = IntentNormalizer(manager).fallback(
+        "What is employee engagement by office?",
+        _context(),
+    )
+    assert intent.question_type == QuestionType.OUT_OF_SCOPE
+    assert intent.measures == []
+
+
+def test_follow_up_context_reapplies_typed_filters() -> None:
+    prior = ActiveContext(
+        current_measures=["waste_revenue"],
+        current_dimensions=["region"],
+        semantic_filters=[
+            SemanticFilter(entity="region", operator=FilterOperator.EQUALS, value="West")
+        ],
+        time_range=TimeRange(
+            range_type=TimeRangeType.ABSOLUTE,
+            start_date="2026-01-01",
+            end_date="2026-09-01",
+        ),
+    )
+    follow_up = AnalyticalIntent(
+        question_type=QuestionType.AGGREGATION,
+        measures=[],
+        dimensions=["service_line"],
+        references_prior_turn=True,
+        raw_question="Now break that down by service line",
+    )
+
+    inherited = PipelineOrchestrator._inherit_active_context(follow_up, prior)
+    assert inherited.measures == ["waste_revenue"]
+    assert inherited.dimensions == ["service_line"]
+    assert inherited.filters == prior.semantic_filters
+    assert inherited.time_range == prior.time_range
+
+
+def test_fallback_comparison_reuses_active_window_with_matched_prior_period(
+    manager: SCLManager,
+) -> None:
+    prior = ActiveContext(
+        current_measures=["waste_revenue", "waste_operating_margin_pct"],
+        time_range=TimeRange(
+            range_type=TimeRangeType.ABSOLUTE,
+            start_date="2026-01-01",
+            end_date="2026-09-01",
+        ),
+    )
+    intent = IntentNormalizer(manager).fallback("Compare that with last year", _context(), prior)
+
+    assert intent.question_type == QuestionType.COMPARISON
+    assert intent.time_range is not None
+    assert intent.time_range.start_date == "2026-01-01"
+    assert intent.time_range.end_date == "2026-09-01"
+    assert intent.time_comparison is not None
+    assert intent.time_comparison.comparison_start_date == "2025-01-01"
+    assert intent.time_comparison.comparison_end_date == "2025-09-01"
+
+
+def test_contextual_same_months_comparison_uses_prior_typed_window() -> None:
+    prior = ActiveContext(
+        current_measures=["waste_revenue", "waste_operating_margin_pct"],
+        current_dimensions=["region"],
+        time_range=TimeRange(
+            range_type=TimeRangeType.ABSOLUTE,
+            start_date="2026-01-01",
+            end_date="2027-01-01",
+        ),
+    )
+    extracted = AnalyticalIntent(
+        question_type=QuestionType.FOLLOW_UP_EXTEND,
+        measures=[],
+        references_prior_turn=True,
+        time_comparison=TimeComparison(
+            comparison_period=RelativePeriod.LAST_YEAR,
+            comparison_label="Model supplied but follow-up typed comparison",
+        ),
+        raw_question="Compare that with the same months in 2025.",
+    )
+
+    resolved = PipelineOrchestrator._resolve_contextual_comparison(
+        extracted,
+        extracted.raw_question,
+        prior,
+    )
+    inherited = PipelineOrchestrator._inherit_active_context(resolved, prior)
+
+    assert inherited.measures == prior.current_measures
+    assert inherited.dimensions == prior.current_dimensions
+    assert inherited.time_range is not None
+    assert inherited.time_range.start_date == "2026-01-01"
+    assert inherited.time_range.end_date == "2026-09-01"
+    assert inherited.time_comparison is not None
+    assert inherited.time_comparison.comparison_start_date == "2025-01-01"
+    assert inherited.time_comparison.comparison_end_date == "2025-09-01"
+
+
+def test_grouped_narrative_lists_observed_waste_regions(manager: SCLManager) -> None:
+    intent = AnalyticalIntent(
+        question_type=QuestionType.AGGREGATION,
+        measures=["waste_revenue", "waste_operating_margin_pct"],
+        dimensions=["region"],
+        time_range=TimeRange(
+            range_type=TimeRangeType.ABSOLUTE,
+            start_date="2026-01-01",
+            end_date="2026-09-01",
+        ),
+        raw_question="Break that down by region.",
+    )
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    sql = """
+        SELECT SUM(f.revenue) AS waste_revenue,
+               100.0 * SUM(f.operating_profit) / NULLIF(SUM(f.revenue), 0)
+                   AS waste_operating_margin_pct,
+               c.region AS region
+        FROM wm_finance_monthly AS f
+        JOIN wm_contracts AS k ON f.contract_id = k.id
+        JOIN wm_customers AS c ON k.customer_id = c.id
+        WHERE f.month >= '2026-01-01' AND f.month < '2026-09-01'
+        GROUP BY c.region
+    """
+    with sqlite3.connect(DEMO_DB) as connection:
+        rows = connection.execute(sql).fetchall()
+    result = QueryResult(
+        columns=[
+            ColumnMeta(name="waste_revenue", data_type="float", unit="USD"),
+            ColumnMeta(name="waste_operating_margin_pct", data_type="float", unit="%"),
+            ColumnMeta(name="region", data_type="str"),
+        ],
+        rows=[list(row) for row in rows],
+        row_count=len(rows),
+        executed_sql=sql,
+        execution_time_ms=1.0,
+        database_dialect="sqlite",
+    )
+    analysed = AnalysedResult(query_result=result)
+    engine = StatisticalEngine()
+    report = engine.analyse(analysed, intent, plan)
+
+    narrative = engine.narrative(report, intent, plan)
+
+    assert narrative is not None
+    for region in ("Midwest", "Northeast", "Southeast", "West"):
+        assert region in narrative
+    assert "$92,587,901.74" in narrative
+    assert "33.83%" in narrative
+
+
+def test_comparison_narrative_reports_all_measures_and_units(
+    manager: SCLManager,
+) -> None:
+    intent = AnalyticalIntent(
+        question_type=QuestionType.COMPARISON,
+        measures=["waste_revenue", "waste_operating_margin_pct"],
+        time_range=TimeRange(
+            range_type=TimeRangeType.ABSOLUTE,
+            start_date="2026-01-01",
+            end_date="2026-09-01",
+        ),
+        time_comparison=TimeComparison(
+            comparison_period=RelativePeriod.LAST_YEAR,
+            comparison_label="Same observed months in 2025",
+            comparison_start_date="2025-01-01",
+            comparison_end_date="2025-09-01",
+        ),
+        raw_question="Compare that with the same months in 2025.",
+    )
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    result = QueryResult(
+        columns=[
+            ColumnMeta(name="waste_revenue", data_type="float", unit="USD"),
+            ColumnMeta(name="waste_operating_margin_pct", data_type="float", unit="%"),
+            ColumnMeta(name="comparison_period", data_type="str"),
+        ],
+        rows=[
+            [51_474_889.90, 33.826410, "Latest period"],
+            [49_034_692.47, 40.917050, "Same observed months in 2025"],
+        ],
+        row_count=2,
+        executed_sql="SELECT governed comparison",
+        execution_time_ms=1.0,
+        database_dialect="sqlite",
+    )
+    analysed = AnalysedResult(query_result=result)
+    engine = StatisticalEngine()
+    report = engine.analyse(analysed, intent, plan)
+
+    narrative = engine.narrative(report, intent, plan)
+
+    assert narrative is not None
+    assert "revenue increased by 4.98%" in narrative
+    assert "$49,034,692.47" in narrative
+    assert "$51,474,889.90" in narrative
+    assert "operating margin pct decreased by 7.09 percentage points" in narrative
+    assert "40.92%" in narrative and "33.83%" in narrative

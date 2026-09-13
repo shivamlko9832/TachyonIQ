@@ -1,0 +1,8 @@
+INFO:     127.0.0.1:58354 - "GET /health HTTP/1.1" 200 OK
+18:03:53.338 agent run
+18:03:53.367   chat gpt-4o
+18:03:57.317 agent run
+18:03:57.320   chat gpt-4o
+18:03:59.024 agent run
+18:03:59.027   chat gpt-4o
+INFO:     127.0.0.1:58426 - "POST /query HTTP/1.1" 200 OK

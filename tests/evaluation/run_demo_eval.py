@@ -29,6 +29,9 @@ ALLOWED_TABLES = {
     "customer_monthly_metrics",
     "marketing_performance",
     "business_kpi_monthly",
+    "wm_customers",
+    "wm_contracts",
+    "wm_finance_monthly",
 }
 
 
@@ -125,6 +128,24 @@ def run(
             )
         ]
 
+        waste_monthly = connection.execute(
+            """SELECT month, SUM(revenue), SUM(operating_profit), SUM(fuel_cost),
+                      SUM(labor_cost), SUM(disposal_cost), SUM(fleet_cost)
+               FROM wm_finance_monthly
+               GROUP BY month ORDER BY month"""
+        ).fetchall()
+        west_cost_periods = connection.execute(
+            """SELECT CASE WHEN f.month>='2026-01-01' THEN '2026' ELSE '2025' END AS period,
+                      SUM(f.collection_volume_tons), SUM(f.fuel_cost),
+                      SUM(f.disposal_cost), SUM(f.operating_profit), SUM(f.revenue)
+               FROM wm_finance_monthly f
+               JOIN wm_contracts k ON k.id=f.contract_id
+               JOIN wm_customers c ON c.id=k.customer_id
+               WHERE c.region='West' AND f.month>='2025-01-01' AND f.month<'2026-09-01'
+                 AND (f.month<'2025-09-01' OR f.month>='2026-01-01')
+               GROUP BY period ORDER BY period"""
+        ).fetchall()
+
     europe_prior = float(checked_proofs["europe_prior_six_month_revenue"])
     europe_recent = float(checked_proofs["europe_recent_six_month_revenue"])
     apac_mean = statistics.fmean(apac_august)
@@ -145,7 +166,35 @@ def run(
         ),
         "health_observations": len(health_rows),
         "service_observations": len(service_rows),
+        "waste_monthly_observations": len(waste_monthly),
     }
+
+    waste_revenue = [float(row[1]) for row in waste_monthly]
+    waste_margin = [100.0 * float(row[2]) / float(row[1]) for row in waste_monthly]
+    waste_fuel_share = [100.0 * float(row[3]) / float(row[1]) for row in waste_monthly]
+    statistical_evidence.update(
+        {
+            "waste_revenue_mean": round(statistics.fmean(waste_revenue), 2),
+            "waste_revenue_volatility_pct": round(
+                100.0 * statistics.stdev(waste_revenue) / statistics.fmean(waste_revenue), 2
+            ),
+            "waste_fuel_share_vs_margin_pearson_r": round(
+                _pearson(waste_fuel_share, waste_margin), 4
+            ),
+            "west_2025_fuel_cost_per_ton": round(
+                float(west_cost_periods[0][2]) / float(west_cost_periods[0][1]), 2
+            ),
+            "west_2026_fuel_cost_per_ton": round(
+                float(west_cost_periods[1][2]) / float(west_cost_periods[1][1]), 2
+            ),
+            "west_2025_disposal_cost_per_ton": round(
+                float(west_cost_periods[0][3]) / float(west_cost_periods[0][1]), 2
+            ),
+            "west_2026_disposal_cost_per_ton": round(
+                float(west_cost_periods[1][3]) / float(west_cost_periods[1][1]), 2
+            ),
+        }
+    )
 
     if statistical_evidence["adoption_vs_churn_risk_pearson_r"] > -0.5:
         raise AssertionError("expected strong inverse relationship between adoption and churn risk")
@@ -159,6 +208,27 @@ def run(
         raise AssertionError("expected a clear APAC August order anomaly")
     if int(checked_proofs["regions_below_target_2026"]) < 1:
         raise AssertionError("expected at least one region below 2026 target")
+    for quality_check in (
+        "wm_operating_cost_identity_violations",
+        "wm_operating_profit_identity_violations",
+        "wm_duplicate_contract_months",
+        "wm_required_nulls",
+        "wm_ar_rollforward_violations",
+    ):
+        if int(checked_proofs[quality_check]) != 0:
+            raise AssertionError(f"waste finance reconciliation failed: {quality_check}")
+    if float(checked_proofs["wm_west_2026_margin_pct"]) >= float(
+        checked_proofs["wm_west_2025_margin_pct"]
+    ):
+        raise AssertionError("expected documented West margin pressure in 2026")
+    if statistical_evidence["west_2026_fuel_cost_per_ton"] <= statistical_evidence[
+        "west_2025_fuel_cost_per_ton"
+    ]:
+        raise AssertionError("expected documented West fuel-cost pressure in 2026")
+    if statistical_evidence["west_2026_disposal_cost_per_ton"] <= statistical_evidence[
+        "west_2025_disposal_cost_per_ton"
+    ]:
+        raise AssertionError("expected documented West disposal-cost pressure in 2026")
 
     report = {
         "database": str(database_path.resolve()),

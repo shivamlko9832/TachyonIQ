@@ -102,12 +102,18 @@ async def run_case(orchestrator: PipelineOrchestrator, case: EvalCase) -> CaseRe
 
     state = await orchestrator.conversation_store.load(session_id)
     resolved_intent = state.turns[-1].resolved_intent if state.turns else None
+    out_of_scope_match = (
+        case.expected_question_type == "out_of_scope"
+        and response.error is not None
+        and response.error.error_type == "out_of_scope"
+    )
 
     return CaseResult(
         case_id=case.id,
         question=case.question,
         answer=response.answer,
-        intent_correct=resolved_intent is not None and intent_matches(resolved_intent, case),
+        intent_correct=out_of_scope_match
+        or (resolved_intent is not None and intent_matches(resolved_intent, case)),
         sql_correct=sql_matches(response.sql, case),
         latency_ms=latency_ms,
         error=response.error.message if response.error else None,

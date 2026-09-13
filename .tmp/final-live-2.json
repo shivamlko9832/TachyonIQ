@@ -1,0 +1,336 @@
+{
+  "session_id": "ae27d7d6-575c-4bcc-8541-3ac0644c6e8b",
+  "turn_id": 1,
+  "timestamp": "2026-09-13T13:16:22.184958Z",
+  "answer": "Governed breakdown for 2026-01-01 through 2026-08-31 across 4 group(s): Southeast: revenue $92,587,901.74, operating margin pct 34.12%; Northeast: revenue $66,284,779.53, operating margin pct 39.84%; Midwest: revenue $58,055,888.43, operating margin pct 38.71%; West: revenue $51,474,889.90, operating margin pct 33.83%.",
+  "sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct, wm_customers.region AS region FROM wm_finance_monthly LEFT JOIN wm_contracts ON wm_finance_monthly.contract_id = wm_contracts.id LEFT JOIN wm_customers ON wm_contracts.customer_id = wm_customers.id WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-09-01' GROUP BY wm_customers.region LIMIT 5000",
+  "row_count": 4,
+  "is_truncated": false,
+  "execution_time_ms": 16.0844000056386,
+  "query_result": {
+    "columns": [
+      {
+        "name": "waste_revenue",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "USD"
+      },
+      {
+        "name": "waste_operating_margin_pct",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "%"
+      },
+      {
+        "name": "region",
+        "data_type": "str",
+        "nullable": true,
+        "unit": null
+      }
+    ],
+    "rows": [
+      [
+        58055888.43,
+        38.71297575111452,
+        "Midwest"
+      ],
+      [
+        66284779.53,
+        39.83991461878217,
+        "Northeast"
+      ],
+      [
+        92587901.74,
+        34.1220630625342,
+        "Southeast"
+      ],
+      [
+        51474889.9,
+        33.826410029873614,
+        "West"
+      ]
+    ],
+    "row_count": 4,
+    "is_truncated": false,
+    "truncated_at": null,
+    "executed_sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct, wm_customers.region AS region FROM wm_finance_monthly LEFT JOIN wm_contracts ON wm_finance_monthly.contract_id = wm_contracts.id LEFT JOIN wm_customers ON wm_contracts.customer_id = wm_customers.id WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-09-01' GROUP BY wm_customers.region LIMIT 5000",
+    "execution_time_ms": 16.0844000056386,
+    "database_dialect": "sqlite"
+  },
+  "visualisation": {
+    "spec": {
+      "mark": "bar",
+      "encoding": {
+        "x": {
+          "field": "region",
+          "type": "nominal"
+        },
+        "y": {
+          "field": "waste_revenue",
+          "type": "quantitative"
+        }
+      },
+      "data": {
+        "values": [
+          {
+            "waste_revenue": 58055888.43,
+            "waste_operating_margin_pct": 38.71297575111452,
+            "region": "Midwest"
+          },
+          {
+            "waste_revenue": 66284779.53,
+            "waste_operating_margin_pct": 39.83991461878217,
+            "region": "Northeast"
+          },
+          {
+            "waste_revenue": 92587901.74,
+            "waste_operating_margin_pct": 34.1220630625342,
+            "region": "Southeast"
+          },
+          {
+            "waste_revenue": 51474889.9,
+            "waste_operating_margin_pct": 33.826410029873614,
+            "region": "West"
+          }
+        ]
+      },
+      "$schema": "https://vega.github.io/schema/vega-lite/v5.json"
+    },
+    "chart_type": "bar",
+    "title": "Break that down by region.",
+    "reasoning": null
+  },
+  "supplementary_visualisations": [],
+  "key_finding": "waste_revenue: 268,403,459.60",
+  "key_findings_bullets": [
+    "Waste Revenue: total 268,403,459.60, avg 67,100,864.90, range 51,474,889.90–92,587,901.74.",
+    "Waste Operating Margin Pct: values span 33.83–39.84 across groups and must not be summed.",
+    "Query returned 4 data point(s)."
+  ],
+  "drivers": [
+    "Breakdown by 'region' may reveal which segment is driving overall performance."
+  ],
+  "anomaly_descriptions": [],
+  "suggested_questions": [
+    "Show this as a trend over time",
+    "Break this down by status",
+    "Compare to the same period last year",
+    "What is driving these results?"
+  ],
+  "correlation_result": null,
+  "anomaly_result": null,
+  "forecast_result": null,
+  "data_quality": {
+    "null_rates": {
+      "waste_revenue": 0.0,
+      "waste_operating_margin_pct": 0.0,
+      "region": 0.0
+    },
+    "duplicate_row_count": 0,
+    "duplicate_row_pct": 0.0,
+    "empty_string_counts": {},
+    "issues": [],
+    "overall_quality_score": 100.0,
+    "summary": "No data quality issues detected across 3 column(s).",
+    "skipped": false,
+    "skip_reason": null
+  },
+  "explainability": {
+    "sql_breakdown": "Tables: wm_finance_monthly, wm_contracts, wm_customers | Aggregations: SUM | Group by: wm_customers.region | Filters: 2 condition(s)",
+    "tables_referenced": [
+      "wm_finance_monthly",
+      "wm_contracts",
+      "wm_customers"
+    ],
+    "filters_applied": [
+      "wm_finance_monthly.month >= '2026-01-01'",
+      "wm_finance_monthly.month < '2026-09-01'"
+    ],
+    "aggregations": [
+      "SUM"
+    ],
+    "assumptions": [
+      "NULL values are automatically excluded from aggregate functions (SUM, AVG, MIN, MAX ignore NULLs by SQL standard).",
+      "Query includes LIMIT 5,000 — result may not represent the full dataset.",
+      "A date/time filter is applied — results reflect the specified time period only.",
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts."
+    ],
+    "chart_rationale": "Bar chart selected: comparing discrete categories on a numeric measure.",
+    "calculation_steps": [
+      "Step 1: Read data from wm_finance_monthly, wm_contracts, and wm_customers.",
+      "Step 2: Apply filter(s): wm_finance_monthly.month >= '2026-01-01'; wm_finance_monthly.month < '2026-09-01'.",
+      "Step 3: Group rows by wm_customers.region.",
+      "Step 4: Compute SUM for each group.",
+      "Step 5: Return the top 5,000 rows.",
+      "Applied sample descriptive statistics and t confidence interval.",
+      "Computed the response only from the validated result fingerprint 26666e303d91."
+    ]
+  },
+  "generated_insights": {
+    "key_findings": [
+      "Total waste revenue is $268,403,459.60 across all regions, with an average of $67,100,864.90 per region.",
+      "The Northeast region has the highest waste operating margin at 39.84%, while the West has the lowest at 33.83%.",
+      "The Southeast region has the highest waste revenue of $92,587,901.74, while the West has the lowest at $51,474,889.90."
+    ],
+    "drivers": [
+      "Hypothesis: Higher waste revenue in the Southeast may be due to larger industrial activities or population density.",
+      "Hypothesis: The variance in waste operating margins may be driven by regional cost structures or regulatory differences."
+    ],
+    "recommendations": [
+      "Investigate factors contributing to high revenue in the Southeast region.",
+      "Analyze regional cost structures to understand operating margin variations.",
+      "Explore market conditions in the Northeast for high operating margins."
+    ],
+    "data_quality_notes": [],
+    "confidence": "medium",
+    "evidence_verified": true,
+    "verification_notes": [
+      "Every retained numerical finding matches the deterministic report."
+    ]
+  },
+  "statistical_analysis": {
+    "engine": "deterministic-statistics-v1",
+    "operations": [
+      "descriptive"
+    ],
+    "analysis_profile": null,
+    "confidence_level": 0.95,
+    "sample_size": 4,
+    "columns_analyzed": [
+      "waste_revenue",
+      "waste_operating_margin_pct",
+      "region"
+    ],
+    "descriptive": {
+      "waste_revenue": {
+        "count": 4,
+        "null_count": 0,
+        "sum": 268403459.6,
+        "mean": 67100864.9,
+        "median": 62170333.980000004,
+        "stddev": 18039195.623771805,
+        "variance": 325412578752707.9,
+        "min": 51474889.9,
+        "max": 92587901.74,
+        "q1": 56410638.7975,
+        "q3": 72860560.0825,
+        "iqr": 16449921.284999996,
+        "coefficient_of_variation_pct": 26.88370060602871,
+        "standard_error": 9019597.811885903,
+        "mean_confidence_interval": [
+          38396479.16841869,
+          95805250.6315813
+        ]
+      },
+      "waste_operating_margin_pct": {
+        "count": 4,
+        "null_count": 0,
+        "sum": 146.5013634623045,
+        "mean": 36.62534086557613,
+        "median": 36.41751940682436,
+        "stddev": 3.097962632245416,
+        "variance": 9.597372470788946,
+        "min": 33.826410029873614,
+        "max": 39.83991461878217,
+        "q1": 34.048149804369054,
+        "q3": 38.99471046803143,
+        "iqr": 4.946560663662375,
+        "coefficient_of_variation_pct": 8.458522320968122,
+        "standard_error": 1.548981316122708,
+        "mean_confidence_interval": [
+          31.695790999127922,
+          41.55489073202433
+        ]
+      }
+    },
+    "aggregates": {
+      "waste_revenue": {
+        "value": 268403459.6,
+        "method": "sum",
+        "additivity": "additive",
+        "observations": 4
+      },
+      "waste_operating_margin_pct": {
+        "value": 36.62534086557613,
+        "method": "mean_across_returned_buckets",
+        "additivity": "non_additive",
+        "observations": 4
+      }
+    },
+    "tests": {},
+    "anomalies": {},
+    "provenance": {
+      "source_rows": 4,
+      "executed_sql_sha256": "d65f031debf7cf67c94f01267b64cd736f8953bdcc1219b20efccaa5c83ce0bb",
+      "result_sha256": "26666e303d91f35f41fe267ac7cc72d81f552753fe403937592cb89e1002fb13",
+      "database_dialect": "sqlite",
+      "is_truncated": false,
+      "deterministic": true
+    },
+    "methods": [
+      "sample descriptive statistics and t confidence interval"
+    ],
+    "assumptions": [
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts."
+    ],
+    "limitations": [],
+    "breakdown": {
+      "dimensions": [
+        "region"
+      ],
+      "population_observations": 4,
+      "rows": [
+        {
+          "region": "Midwest",
+          "waste_revenue": 58055888.43,
+          "waste_operating_margin_pct": 38.71297575111452
+        },
+        {
+          "region": "Northeast",
+          "waste_revenue": 66284779.53,
+          "waste_operating_margin_pct": 39.83991461878217
+        },
+        {
+          "region": "Southeast",
+          "waste_revenue": 92587901.74,
+          "waste_operating_margin_pct": 34.1220630625342
+        },
+        {
+          "region": "West",
+          "waste_revenue": 51474889.9,
+          "waste_operating_margin_pct": 33.826410029873614
+        }
+      ]
+    }
+  },
+  "error": null,
+  "question_type": "follow_up_refine",
+  "complexity_tier": "analytical",
+  "investigation_steps": null,
+  "evidence_nodes": [],
+  "tables_used": [
+    "wm_finance_monthly",
+    "wm_contracts",
+    "wm_customers"
+  ],
+  "critic_score": 1.0,
+  "pipeline_duration_ms": 11752.530900004786,
+  "context_snapshot": {
+    "current_measures": [
+      "waste_revenue",
+      "waste_operating_margin_pct"
+    ],
+    "current_dimensions": [
+      "region"
+    ],
+    "accumulated_filters": [],
+    "current_time_range": "2026-01-01 to 2026-09-01",
+    "current_tables": [
+      "wm_finance_monthly",
+      "wm_contracts",
+      "wm_customers"
+    ]
+  }
+}

@@ -24,6 +24,21 @@ GROUND_TRUTH_PATH = ROOT / "data" / "demo_ground_truth.json"
 SEED = 42
 AS_OF_DATE = dt.date(2026, 9, 1)
 START_MONTH = dt.date(2023, 9, 1)
+WM_END_MONTH = dt.date(2026, 8, 1)
+
+WM_REGIONS = {
+    "Northeast": ["MA", "NY", "PA", "NJ"],
+    "Southeast": ["FL", "GA", "NC", "TN"],
+    "Midwest": ["IL", "IN", "MI", "OH"],
+    "West": ["AZ", "CA", "CO", "WA"],
+}
+WM_SERVICE_LINES = [
+    "Residential Collection",
+    "Commercial Collection",
+    "Roll-Off",
+    "Recycling",
+    "Transfer & Disposal",
+]
 
 REGIONS = {
     "North America": ["United States", "Canada"],
@@ -212,8 +227,248 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             churned_accounts INTEGER NOT NULL, marketing_spend REAL NOT NULL,
             support_tickets INTEGER NOT NULL, avg_csat REAL, UNIQUE(month, region)
         );
+        CREATE TABLE wm_customers (
+            id INTEGER PRIMARY KEY, customer_name TEXT NOT NULL,
+            customer_segment TEXT NOT NULL, region TEXT NOT NULL, state TEXT NOT NULL,
+            industry TEXT NOT NULL, credit_terms_days INTEGER NOT NULL,
+            customer_since TEXT NOT NULL, account_status TEXT NOT NULL
+        );
+        CREATE TABLE wm_contracts (
+            id INTEGER PRIMARY KEY,
+            customer_id INTEGER NOT NULL REFERENCES wm_customers(id),
+            contract_name TEXT NOT NULL, service_line TEXT NOT NULL,
+            pricing_model TEXT NOT NULL, contract_start_date TEXT NOT NULL,
+            contract_end_date TEXT, contract_status TEXT NOT NULL,
+            base_monthly_fee REAL NOT NULL, price_per_ton REAL NOT NULL
+        );
+        CREATE TABLE wm_finance_monthly (
+            id INTEGER PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES wm_contracts(id),
+            month TEXT NOT NULL, service_events INTEGER NOT NULL,
+            collection_volume_tons REAL NOT NULL, disposal_volume_tons REAL NOT NULL,
+            recycling_volume_tons REAL NOT NULL, revenue REAL NOT NULL,
+            revenue_budget REAL NOT NULL, fuel_cost REAL NOT NULL,
+            labor_cost REAL NOT NULL, disposal_cost REAL NOT NULL,
+            fleet_cost REAL NOT NULL, other_operating_cost REAL NOT NULL,
+            operating_cost REAL NOT NULL, operating_profit REAL NOT NULL,
+            invoices_billed REAL NOT NULL, cash_collected REAL NOT NULL,
+            ar_balance REAL NOT NULL, overdue_ar_balance REAL NOT NULL,
+            days_sales_outstanding REAL NOT NULL,
+            UNIQUE(contract_id, month)
+        );
         """
     )
+
+
+def _generate_waste_finance(
+    rng: random.Random,
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+    """Create a deterministic synthetic waste-management finance star schema.
+
+    Every financial identity is calculated before insertion.  The data contains
+    documented operating signals for demonstrations, but no response value is
+    embedded in application code; answers must still be computed from SQL.
+    """
+    industries = [
+        "Municipality",
+        "Property Management",
+        "Manufacturing",
+        "Retail",
+        "Healthcare",
+        "Hospitality",
+        "Construction",
+    ]
+    segment_weights = [0.20, 0.55, 0.25]
+    segments = ["Municipal", "Commercial", "Industrial"]
+    region_names = list(WM_REGIONS)
+    region_weights = [0.25, 0.29, 0.27, 0.19]
+    customers: list[tuple[Any, ...]] = []
+    for customer_id in range(1, 421):
+        segment = rng.choices(segments, weights=segment_weights, k=1)[0]
+        region = rng.choices(region_names, weights=region_weights, k=1)[0]
+        state = rng.choice(WM_REGIONS[region])
+        joined = START_MONTH - dt.timedelta(days=rng.randint(90, 1800))
+        customers.append(
+            (
+                customer_id,
+                f"{rng.choice(COMPANY_PREFIXES)} {rng.choice(['Environmental', 'Community', 'Industrial', 'Properties', 'Municipal'])} {customer_id:04d}",
+                segment,
+                region,
+                state,
+                "Municipality" if segment == "Municipal" else rng.choice(industries[1:]),
+                {"Municipal": 45, "Commercial": 30, "Industrial": 30}[segment],
+                joined.isoformat(),
+                "Active",
+            )
+        )
+
+    contracts: list[tuple[Any, ...]] = []
+    contract_id = 1
+    for customer in customers:
+        customer_id, segment = customer[0], customer[2]
+        contract_count = 2 if customer_id % 3 else 1
+        for contract_number in range(1, contract_count + 1):
+            service_line = rng.choices(
+                WM_SERVICE_LINES,
+                weights=[0.18, 0.32, 0.20, 0.16, 0.14],
+                k=1,
+            )[0]
+            start_offset = rng.randint(0, 7)
+            start_date = _months(START_MONTH, dt.date(2024, 4, 1))[start_offset]
+            ended = contract_id % 31 == 0
+            end_date = dt.date(2026, rng.randint(2, 7), 1) if ended else None
+            fee_base = {
+                "Municipal": 39_000,
+                "Commercial": 8_500,
+                "Industrial": 24_000,
+            }[segment]
+            line_factor = {
+                "Residential Collection": 1.30,
+                "Commercial Collection": 1.00,
+                "Roll-Off": 0.82,
+                "Recycling": 0.75,
+                "Transfer & Disposal": 1.15,
+            }[service_line]
+            contracts.append(
+                (
+                    contract_id,
+                    customer_id,
+                    f"WM-{customer_id:04d}-{contract_number}",
+                    service_line,
+                    "Fixed plus tonnage" if service_line != "Roll-Off" else "Per haul and tonnage",
+                    start_date.isoformat(),
+                    end_date.isoformat() if end_date else None,
+                    "Expired" if ended else "Active",
+                    round(fee_base * line_factor * rng.uniform(0.72, 1.35), 2),
+                    round(rng.uniform(42, 78) * line_factor, 2),
+                )
+            )
+            contract_id += 1
+
+    customer_lookup = {row[0]: row for row in customers}
+    finance: list[tuple[Any, ...]] = []
+    row_id = 1
+    west_anomaly_assigned = False
+    for contract in contracts:
+        (
+            cid,
+            customer_id,
+            _,
+            service_line,
+            _,
+            start_text,
+            end_text,
+            _,
+            base_fee,
+            price_per_ton,
+        ) = contract
+        customer = customer_lookup[customer_id]
+        segment, region = customer[2], customer[3]
+        start_month = max(START_MONTH, dt.date.fromisoformat(start_text).replace(day=1))
+        end_month = min(
+            WM_END_MONTH,
+            dt.date.fromisoformat(end_text).replace(day=1) if end_text else WM_END_MONTH,
+        )
+        previous_ar = round(base_fee * rng.uniform(0.35, 0.75), 2)
+        anomaly_contract = region == "West" and not west_anomaly_assigned
+        if anomaly_contract:
+            west_anomaly_assigned = True
+        for month_index, month in enumerate(_months(start_month, end_month)):
+            season = 1.0 + 0.08 * math.sin((month.month - 1) / 12 * 2 * math.pi)
+            if service_line == "Roll-Off" and month.month in (4, 5, 6, 7, 8, 9):
+                season *= 1.18
+            growth = 1 + month_index * 0.006
+            if region == "Southeast" and month >= dt.date(2025, 1, 1):
+                growth *= 1.14
+            events_base = {
+                "Municipal": 380,
+                "Commercial": 92,
+                "Industrial": 145,
+            }[segment]
+            events = max(8, int(events_base * season * growth * rng.uniform(0.88, 1.12)))
+            tons_per_event = {
+                "Residential Collection": 0.45,
+                "Commercial Collection": 1.10,
+                "Roll-Off": 3.90,
+                "Recycling": 0.82,
+                "Transfer & Disposal": 5.30,
+            }[service_line]
+            collection_tons = round(events * tons_per_event * rng.uniform(0.88, 1.13), 2)
+            recycling_share = 0.68 if service_line == "Recycling" else rng.uniform(0.08, 0.27)
+            recycling_tons = round(collection_tons * recycling_share, 2)
+            disposal_tons = round(collection_tons - recycling_tons, 2)
+            price_escalation = 1 + 0.031 * max(0, month.year - start_month.year)
+            revenue = round(
+                (base_fee + collection_tons * price_per_ton + events * (18 if service_line == "Roll-Off" else 7))
+                * price_escalation,
+                2,
+            )
+            budget_growth = 1 + 0.007 * month_index
+            revenue_budget = round(base_fee * 1.04 * budget_growth + collection_tons * price_per_ton, 2)
+            fuel_pressure = 1.0
+            disposal_pressure = 1.0
+            if region == "West" and month >= dt.date(2026, 1, 1):
+                fuel_pressure = 1.32
+                disposal_pressure = 1.22
+            fuel_cost = round((events * 10.5 + collection_tons * 4.1) * fuel_pressure, 2)
+            labor_cost = round(events * (44 if segment == "Municipal" else 38) * rng.uniform(0.96, 1.05), 2)
+            disposal_cost = round(disposal_tons * 31.5 * disposal_pressure, 2)
+            fleet_cost = round(events * 15.8 + collection_tons * 2.4, 2)
+            if anomaly_contract and month == dt.date(2026, 7, 1):
+                fleet_cost = round(fleet_cost + 85_000, 2)
+            other_cost = round(revenue * rng.uniform(0.055, 0.075), 2)
+            operating_cost = round(
+                fuel_cost + labor_cost + disposal_cost + fleet_cost + other_cost,
+                2,
+            )
+            operating_profit = round(revenue - operating_cost, 2)
+            invoices = revenue
+            collection_factor = {
+                "Municipal": 0.94,
+                "Commercial": 0.985,
+                "Industrial": 0.97,
+            }[segment]
+            if region == "West" and month >= dt.date(2026, 4, 1):
+                collection_factor -= 0.035
+            cash = round(
+                min(
+                    previous_ar + invoices,
+                    max(0.0, invoices * rng.uniform(collection_factor - 0.025, collection_factor + 0.02) + previous_ar * 0.22),
+                ),
+                2,
+            )
+            ar_balance = round(previous_ar + invoices - cash, 2)
+            overdue_rate = {"Municipal": 0.38, "Commercial": 0.22, "Industrial": 0.28}[segment]
+            overdue_ar = round(ar_balance * overdue_rate * rng.uniform(0.82, 1.18), 2)
+            dso = round(30 * ar_balance / invoices, 2) if invoices else 0.0
+            finance.append(
+                (
+                    row_id,
+                    cid,
+                    month.isoformat(),
+                    events,
+                    collection_tons,
+                    disposal_tons,
+                    recycling_tons,
+                    revenue,
+                    revenue_budget,
+                    fuel_cost,
+                    labor_cost,
+                    disposal_cost,
+                    fleet_cost,
+                    other_cost,
+                    operating_cost,
+                    operating_profit,
+                    invoices,
+                    cash,
+                    ar_balance,
+                    overdue_ar,
+                    dso,
+                )
+            )
+            previous_ar = ar_balance
+            row_id += 1
+    return customers, contracts, finance
 
 
 def _generate_products(rng: random.Random) -> list[tuple[Any, ...]]:
@@ -709,6 +964,11 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         CREATE INDEX ix_customer_metrics_customer ON customer_monthly_metrics(customer_id);
         CREATE INDEX ix_marketing_month_region ON marketing_performance(month, region);
         CREATE INDEX ix_kpi_month_region ON business_kpi_monthly(month, region);
+        CREATE INDEX ix_wm_customers_region_segment ON wm_customers(region, customer_segment);
+        CREATE INDEX ix_wm_contracts_customer ON wm_contracts(customer_id);
+        CREATE INDEX ix_wm_contracts_service ON wm_contracts(service_line);
+        CREATE INDEX ix_wm_finance_month ON wm_finance_monthly(month);
+        CREATE INDEX ix_wm_finance_contract ON wm_finance_monthly(contract_id);
         """
     )
 
@@ -722,6 +982,9 @@ def _ground_truth(connection: sqlite3.Connection, db_path: Path) -> dict[str, An
         "customer_monthly_metrics",
         "marketing_performance",
         "business_kpi_monthly",
+        "wm_customers",
+        "wm_contracts",
+        "wm_finance_monthly",
     ]
     row_counts = {
         table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
@@ -778,10 +1041,56 @@ def _ground_truth(connection: sqlite3.Connection, db_path: Path) -> dict[str, An
             "SELECT ROUND(AVG(churn_risk_score),4) FROM customer_monthly_metrics "
             "WHERE feature_adoption_pct>=70"
         ),
+        "wm_2026_ytd_revenue": (
+            "SELECT ROUND(SUM(revenue),2) FROM wm_finance_monthly "
+            "WHERE month>='2026-01-01' AND month<'2026-09-01'"
+        ),
+        "wm_2026_ytd_operating_margin_pct": (
+            "SELECT ROUND(100.0*SUM(operating_profit)/SUM(revenue),4) "
+            "FROM wm_finance_monthly WHERE month>='2026-01-01' AND month<'2026-09-01'"
+        ),
+        "wm_2026_ytd_budget_variance": (
+            "SELECT ROUND(SUM(revenue)-SUM(revenue_budget),2) FROM wm_finance_monthly "
+            "WHERE month>='2026-01-01' AND month<'2026-09-01'"
+        ),
+        "wm_operating_cost_identity_violations": (
+            "SELECT COUNT(*) FROM wm_finance_monthly WHERE "
+            "ABS(operating_cost-(fuel_cost+labor_cost+disposal_cost+fleet_cost+other_operating_cost))>0.01"
+        ),
+        "wm_operating_profit_identity_violations": (
+            "SELECT COUNT(*) FROM wm_finance_monthly WHERE "
+            "ABS(operating_profit-(revenue-operating_cost))>0.01"
+        ),
+        "wm_duplicate_contract_months": (
+            "SELECT COUNT(*) FROM (SELECT contract_id,month,COUNT(*) AS n "
+            "FROM wm_finance_monthly GROUP BY contract_id,month HAVING n>1)"
+        ),
+        "wm_required_nulls": (
+            "SELECT COUNT(*) FROM wm_finance_monthly WHERE month IS NULL OR revenue IS NULL "
+            "OR operating_cost IS NULL OR operating_profit IS NULL OR ar_balance IS NULL"
+        ),
+        "wm_west_2026_margin_pct": (
+            "SELECT ROUND(100.0*SUM(f.operating_profit)/SUM(f.revenue),4) "
+            "FROM wm_finance_monthly f JOIN wm_contracts c ON c.id=f.contract_id "
+            "JOIN wm_customers w ON w.id=c.customer_id "
+            "WHERE w.region='West' AND f.month>='2026-01-01' AND f.month<'2026-09-01'"
+        ),
+        "wm_west_2025_margin_pct": (
+            "SELECT ROUND(100.0*SUM(f.operating_profit)/SUM(f.revenue),4) "
+            "FROM wm_finance_monthly f JOIN wm_contracts c ON c.id=f.contract_id "
+            "JOIN wm_customers w ON w.id=c.customer_id "
+            "WHERE w.region='West' AND f.month>='2025-01-01' AND f.month<'2025-09-01'"
+        ),
+        "wm_ar_rollforward_violations": (
+            "SELECT COUNT(*) FROM wm_finance_monthly current "
+            "JOIN wm_finance_monthly prior ON prior.contract_id=current.contract_id "
+            "AND prior.month=DATE(current.month,'-1 month') "
+            "WHERE ABS(current.ar_balance-(prior.ar_balance+current.invoices_billed-current.cash_collected))>0.01"
+        ),
     }
     values = {name: connection.execute(sql).fetchone()[0] for name, sql in checks.items()}
     return {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "seed": SEED,
         "as_of_date": AS_OF_DATE.isoformat(),
         "database": str(db_path.resolve()),
@@ -798,6 +1107,11 @@ def _ground_truth(connection: sqlite3.Connection, db_path: Path) -> dict[str, An
             "Low adoption, support burden, contraction, and churn risk move "
             "together by construction.",
             "LATAM has systematically higher discount pressure.",
+            "Waste-management tables are clearly synthetic and use a contract-month fact grain.",
+            "West fuel and disposal rates increase during 2026 and reduce operating margin.",
+            "Southeast service volume accelerates from January 2025.",
+            "One West contract receives a controlled fleet-repair anomaly in July 2026.",
+            "Operating cost, operating profit, and accounts-receivable roll-forward identities reconcile.",
         ],
     }
 
@@ -822,6 +1136,7 @@ def generate(
         monthly = _generate_customer_months(rng, customers)
         tickets = _generate_support_tickets(rng, monthly, orders)
         marketing = _generate_marketing(rng)
+        wm_customers, wm_contracts, wm_finance = _generate_waste_finance(rng)
         connection.executemany("INSERT INTO products VALUES (?,?,?,?,?,?,?,?)", products)
         connection.executemany(
             "INSERT INTO customers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", customers
@@ -842,6 +1157,16 @@ def generate(
         connection.executemany(
             "INSERT INTO business_kpi_monthly VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", kpis
         )
+        connection.executemany(
+            "INSERT INTO wm_customers VALUES (?,?,?,?,?,?,?,?,?)", wm_customers
+        )
+        connection.executemany(
+            "INSERT INTO wm_contracts VALUES (?,?,?,?,?,?,?,?,?,?)", wm_contracts
+        )
+        connection.executemany(
+            "INSERT INTO wm_finance_monthly VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            wm_finance,
+        )
         _create_indexes(connection)
         connection.execute("ANALYZE")
         connection.commit()
@@ -859,7 +1184,7 @@ def generate(
     )
     resolved_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     total_rows = sum(manifest["row_counts"].values())
-    print(f"Generated {target}: {total_rows:,} rows across 7 analytical tables.")
+    print(f"Generated {target}: {total_rows:,} rows across 10 analytical tables.")
     print(f"Ground truth: {resolved_manifest}")
     return manifest
 

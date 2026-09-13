@@ -1,0 +1,266 @@
+{
+  "session_id": "d20664bc-2a95-45e8-86e0-07c70e6044c0",
+  "turn_id": 0,
+  "timestamp": "2026-09-13T13:17:28.546452Z",
+  "answer": "Governed comparison of this year with Last Year: net revenue decreased by 15.70% from $90,909,955.81 to $76,639,526.94 (absolute change $-14,270,428.87).",
+  "sql": "SELECT SUM(orders.net_revenue) AS net_revenue, 'Latest period' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded') AND orders.order_date >= DATE('now', 'start of year') UNION ALL SELECT SUM(orders.net_revenue) AS net_revenue, 'Last Year' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded') AND orders.order_date >= DATE('now', 'start of year', '-1 year') AND orders.order_date < DATE('now', 'start of year') LIMIT 5000",
+  "row_count": 2,
+  "is_truncated": false,
+  "execution_time_ms": 38.2180999731645,
+  "query_result": {
+    "columns": [
+      {
+        "name": "net_revenue",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "USD"
+      },
+      {
+        "name": "comparison_period",
+        "data_type": "str",
+        "nullable": true,
+        "unit": null
+      }
+    ],
+    "rows": [
+      [
+        76639526.94,
+        "Latest period"
+      ],
+      [
+        90909955.81,
+        "Last Year"
+      ]
+    ],
+    "row_count": 2,
+    "is_truncated": false,
+    "truncated_at": null,
+    "executed_sql": "SELECT SUM(orders.net_revenue) AS net_revenue, 'Latest period' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded') AND orders.order_date >= DATE('now', 'start of year') UNION ALL SELECT SUM(orders.net_revenue) AS net_revenue, 'Last Year' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded') AND orders.order_date >= DATE('now', 'start of year', '-1 year') AND orders.order_date < DATE('now', 'start of year') LIMIT 5000",
+    "execution_time_ms": 38.2180999731645,
+    "database_dialect": "sqlite"
+  },
+  "visualisation": {
+    "spec": {
+      "config": {
+        "view": {
+          "continuousWidth": 300,
+          "continuousHeight": 300
+        }
+      },
+      "data": {
+        "name": "data-942bd63e93167e6da6d65c2865d77c52"
+      },
+      "mark": {
+        "type": "bar"
+      },
+      "encoding": {
+        "x": {
+          "field": "comparison_period",
+          "title": "comparison_period",
+          "type": "nominal"
+        },
+        "y": {
+          "field": "net_revenue",
+          "title": "net_revenue",
+          "type": "quantitative"
+        }
+      },
+      "$schema": "https://vega.github.io/schema/vega-lite/v6.4.1.json",
+      "datasets": {
+        "data-942bd63e93167e6da6d65c2865d77c52": [
+          {
+            "net_revenue": 76639526.94,
+            "comparison_period": "Latest period"
+          },
+          {
+            "net_revenue": 90909955.81,
+            "comparison_period": "Last Year"
+          }
+        ]
+      }
+    },
+    "chart_type": "bar_grouped",
+    "title": "Compare revenue this year vs last year.",
+    "reasoning": null
+  },
+  "supplementary_visualisations": [],
+  "key_finding": "net_revenue: 167,549,482.75",
+  "key_findings_bullets": [
+    "Net Revenue: total 167,549,482.75, avg 83,774,741.38, range 76,639,526.94–90,909,955.81.",
+    "Query returned 2 data point(s)."
+  ],
+  "drivers": [
+    "Insufficient trend data to identify specific drivers. A time-series breakdown may surface contributing factors."
+  ],
+  "anomaly_descriptions": [],
+  "suggested_questions": [
+    "Show the percentage change in revenue vs prior period",
+    "Which segment is growing fastest?",
+    "What is the revenue trend for the top performer?",
+    "Break down revenue by region"
+  ],
+  "correlation_result": null,
+  "anomaly_result": null,
+  "forecast_result": null,
+  "data_quality": {
+    "null_rates": {
+      "net_revenue": 0.0,
+      "comparison_period": 0.0
+    },
+    "duplicate_row_count": 0,
+    "duplicate_row_pct": 0.0,
+    "empty_string_counts": {},
+    "issues": [],
+    "overall_quality_score": 100.0,
+    "summary": "No data quality issues detected across 2 column(s).",
+    "skipped": false,
+    "skip_reason": null
+  },
+  "explainability": {
+    "sql_breakdown": "Tables: orders, orders | Aggregations: SUM | Filters: 4 condition(s)",
+    "tables_referenced": [
+      "orders",
+      "orders"
+    ],
+    "filters_applied": [
+      "NOT orders.status IN ('cancelled', 'refunded')",
+      "orders.order_date >= DATE('now', 'start of year') UNION ALL SELECT SUM(orders.net_revenue) AS net_revenue, 'Last Year' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded')",
+      "orders.order_date >= DATE('now', 'start of year', '-1 year')",
+      "orders.order_date < DATE('now', 'start of year')"
+    ],
+    "aggregations": [
+      "SUM"
+    ],
+    "assumptions": [
+      "NULL values are automatically excluded from aggregate functions (SUM, AVG, MIN, MAX ignore NULLs by SQL standard).",
+      "Query includes LIMIT 5,000 — result may not represent the full dataset.",
+      "A date/time filter is applied — results reflect the specified time period only.",
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts.",
+      "Fewer than three observations limit inferential and variability analysis."
+    ],
+    "chart_rationale": "Bar chart selected: comparing discrete categories on a numeric measure.",
+    "calculation_steps": [
+      "Step 1: Read data from orders and orders.",
+      "Step 2: Apply filter(s): NOT orders.status IN ('cancelled', 'refunded'); orders.order_date >= DATE('now', 'start of year') UNION ALL SELECT SUM(orders.net_revenue) AS net_revenue, 'Last Year' AS comparison_period FROM orders WHERE NOT orders.status IN ('cancelled', 'refunded'); orders.order_date >= DATE('now', 'start of year', '-1 year').",
+      "Step 3: Compute SUM for each group.",
+      "Step 4: Return the top 5,000 rows.",
+      "Applied absolute and relative period delta.",
+      "Computed the response only from the validated result fingerprint 564c52b1cbce."
+    ]
+  },
+  "generated_insights": {
+    "key_findings": [
+      "Total net revenue for the examined period is 167,549,482.75.",
+      "The mean net revenue across both periods is 83,774,741.38, indicating fluctuations."
+    ],
+    "drivers": [
+      "Hypothesis: Market conditions could have worsened this year, possibly impacting sales and revenue.",
+      "Hypothesis: Changes in pricing strategy or increased competition could have led to decreased revenue."
+    ],
+    "recommendations": [
+      "Drill down by product or service line to identify which areas saw the largest declines.",
+      "Investigate external market factors that may have influenced this year's revenue drop.",
+      "Compare marketing and sales strategies implemented this year versus last year."
+    ],
+    "data_quality_notes": [],
+    "confidence": "medium",
+    "evidence_verified": true,
+    "verification_notes": [
+      "Every retained numerical finding matches the deterministic report.",
+      "Removed 1 ungrounded finding(s)."
+    ]
+  },
+  "statistical_analysis": {
+    "engine": "deterministic-statistics-v1",
+    "operations": [
+      "comparison"
+    ],
+    "analysis_profile": null,
+    "confidence_level": 0.95,
+    "sample_size": 2,
+    "columns_analyzed": [
+      "net_revenue",
+      "comparison_period"
+    ],
+    "descriptive": {
+      "net_revenue": {
+        "count": 2,
+        "null_count": 0,
+        "sum": 167549482.75,
+        "mean": 83774741.375,
+        "median": 83774741.375,
+        "stddev": 10090717.024417285,
+        "variance": 101822570066864.81,
+        "min": 76639526.94,
+        "max": 90909955.81,
+        "q1": 80207134.1575,
+        "q3": 87342348.5925,
+        "iqr": 7135214.435000002,
+        "coefficient_of_variation_pct": 12.04505899844956,
+        "standard_error": 7135214.435000002,
+        "mean_confidence_interval": [
+          -6886754.072619081,
+          174436236.82261908
+        ]
+      }
+    },
+    "aggregates": {
+      "net_revenue": {
+        "value": 167549482.75,
+        "method": "sum",
+        "additivity": "additive",
+        "observations": 2
+      }
+    },
+    "tests": {},
+    "anomalies": {},
+    "provenance": {
+      "source_rows": 2,
+      "executed_sql_sha256": "fdbd516b6fff880b61a9bf6f4094132a814271e04be23f43c014bb229bcddaf6",
+      "result_sha256": "564c52b1cbce350cfe7485d052b0ed609282a098944f39b045c01b26564393fe",
+      "database_dialect": "sqlite",
+      "is_truncated": false,
+      "deterministic": true
+    },
+    "methods": [
+      "absolute and relative period delta"
+    ],
+    "assumptions": [
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts."
+    ],
+    "limitations": [
+      "Fewer than three observations limit inferential and variability analysis."
+    ],
+    "comparison": {
+      "net_revenue": {
+        "latest": 76639526.94,
+        "comparison": 90909955.81,
+        "absolute_change": -14270428.870000005,
+        "change_pct": -15.697322414087317
+      }
+    }
+  },
+  "error": null,
+  "question_type": "comparison",
+  "complexity_tier": "very_complex",
+  "investigation_steps": null,
+  "evidence_nodes": [],
+  "tables_used": [
+    "orders"
+  ],
+  "critic_score": 0.93,
+  "pipeline_duration_ms": 6953.458400035743,
+  "context_snapshot": {
+    "current_measures": [
+      "revenue"
+    ],
+    "current_dimensions": [],
+    "accumulated_filters": [],
+    "current_time_range": "this_year",
+    "current_tables": [
+      "orders"
+    ]
+  }
+}

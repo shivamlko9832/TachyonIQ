@@ -1,0 +1,287 @@
+{
+  "session_id": "4a206a55-41c7-4496-a367-52fa268c1931",
+  "turn_id": 3,
+  "timestamp": "2026-09-13T12:46:59.001721Z",
+  "answer": "Governed breakdown for 2026-01-01 through 2026-12-31 across 1 group(s): West: revenue $51,474,889.90, operating margin pct 33.83%.",
+  "sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct, wm_customers.region AS region FROM wm_finance_monthly LEFT JOIN wm_contracts ON wm_finance_monthly.contract_id = wm_contracts.id LEFT JOIN wm_customers ON wm_contracts.customer_id = wm_customers.id WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-12-31' AND wm_customers.region = 'West' GROUP BY wm_customers.region LIMIT 5000",
+  "row_count": 1,
+  "is_truncated": false,
+  "execution_time_ms": 14.915800013113767,
+  "query_result": {
+    "columns": [
+      {
+        "name": "waste_revenue",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "USD"
+      },
+      {
+        "name": "waste_operating_margin_pct",
+        "data_type": "float",
+        "nullable": true,
+        "unit": "%"
+      },
+      {
+        "name": "region",
+        "data_type": "str",
+        "nullable": true,
+        "unit": null
+      }
+    ],
+    "rows": [
+      [
+        51474889.9,
+        33.826410029873614,
+        "West"
+      ]
+    ],
+    "row_count": 1,
+    "is_truncated": false,
+    "truncated_at": null,
+    "executed_sql": "SELECT SUM(wm_finance_monthly.revenue) AS waste_revenue, 100.0 * SUM(wm_finance_monthly.operating_profit) / NULLIF(SUM(wm_finance_monthly.revenue), 0) AS waste_operating_margin_pct, wm_customers.region AS region FROM wm_finance_monthly LEFT JOIN wm_contracts ON wm_finance_monthly.contract_id = wm_contracts.id LEFT JOIN wm_customers ON wm_contracts.customer_id = wm_customers.id WHERE wm_finance_monthly.month >= '2026-01-01' AND wm_finance_monthly.month < '2026-12-31' AND wm_customers.region = 'West' GROUP BY wm_customers.region LIMIT 5000",
+    "execution_time_ms": 14.915800013113767,
+    "database_dialect": "sqlite"
+  },
+  "visualisation": {
+    "value": 51474889.9,
+    "label": "Waste Revenue",
+    "formatted_value": "$51.5M",
+    "trend_direction": null,
+    "trend_pct": null,
+    "comparison_label": null,
+    "unit": "USD"
+  },
+  "supplementary_visualisations": [
+    {
+      "value": 33.826410029873614,
+      "label": "Waste Operating Margin Pct",
+      "formatted_value": "33.83%",
+      "trend_direction": null,
+      "trend_pct": null,
+      "comparison_label": null,
+      "unit": "%"
+    }
+  ],
+  "key_finding": "waste_revenue: 51,474,889.90",
+  "key_findings_bullets": [
+    "Waste Revenue: total 51,474,889.90, avg 51,474,889.90, range 51,474,889.90–51,474,889.90.",
+    "Waste Operating Margin Pct: total 33.83, avg 33.83, range 33.83–33.83.",
+    "Query returned 1 data point(s)."
+  ],
+  "drivers": [
+    "Breakdown by 'region' may reveal which segment is driving overall performance."
+  ],
+  "anomaly_descriptions": [],
+  "suggested_questions": [
+    "Show this as a trend over time",
+    "Break this down by customer name",
+    "Compare to the same period last year",
+    "What is driving these results?"
+  ],
+  "correlation_result": null,
+  "anomaly_result": null,
+  "forecast_result": null,
+  "data_quality": {
+    "null_rates": {
+      "waste_revenue": 0.0,
+      "waste_operating_margin_pct": 0.0,
+      "region": 0.0
+    },
+    "duplicate_row_count": 0,
+    "duplicate_row_pct": 0.0,
+    "empty_string_counts": {},
+    "issues": [],
+    "overall_quality_score": 100.0,
+    "summary": "No data quality issues detected across 3 column(s).",
+    "skipped": false,
+    "skip_reason": null
+  },
+  "explainability": {
+    "sql_breakdown": "Tables: wm_finance_monthly, wm_contracts, wm_customers | Aggregations: SUM | Group by: wm_customers.region | Filters: 3 condition(s)",
+    "tables_referenced": [
+      "wm_finance_monthly",
+      "wm_contracts",
+      "wm_customers"
+    ],
+    "filters_applied": [
+      "wm_finance_monthly.month >= '2026-01-01'",
+      "wm_finance_monthly.month < '2026-12-31'",
+      "wm_customers.region = 'West'"
+    ],
+    "aggregations": [
+      "SUM"
+    ],
+    "assumptions": [
+      "NULL values are automatically excluded from aggregate functions (SUM, AVG, MIN, MAX ignore NULLs by SQL standard).",
+      "Query includes LIMIT 5,000 — result may not represent the full dataset.",
+      "A date/time filter is applied — results reflect the specified time period only.",
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts.",
+      "Fewer than three observations limit inferential and variability analysis."
+    ],
+    "chart_rationale": null,
+    "calculation_steps": [
+      "Step 1: Read data from wm_finance_monthly, wm_contracts, and wm_customers.",
+      "Step 2: Apply filter(s): wm_finance_monthly.month >= '2026-01-01'; wm_finance_monthly.month < '2026-12-31'; wm_customers.region = 'West'.",
+      "Step 3: Group rows by wm_customers.region.",
+      "Step 4: Compute SUM for each group.",
+      "Step 5: Return the top 5,000 rows.",
+      "Applied sample descriptive statistics and t confidence interval.",
+      "Computed the response only from the validated result fingerprint 5933fe08cc99."
+    ]
+  },
+  "generated_insights": {
+    "key_findings": [
+      "The waste revenue for the period is $51,474,889.90, based on a single data point.",
+      "The waste operating margin percentage stands at 33.83%, consistent across the one data point.",
+      "There are no data quality issues detected across the dataset, with a perfect score of 100.0."
+    ],
+    "drivers": [
+      "Hypothesis: The consistent waste operating margin might indicate stable pricing or cost control measures.",
+      "Hypothesis: The high waste revenue could be influenced by increased service demand or higher pricing strategies."
+    ],
+    "recommendations": [
+      "Analyze additional data points to compare trends with previous years.",
+      "Investigate factors contributing to the high operating margin."
+    ],
+    "data_quality_notes": [],
+    "confidence": "low",
+    "evidence_verified": true,
+    "verification_notes": [
+      "Every retained numerical finding matches the deterministic report."
+    ]
+  },
+  "statistical_analysis": {
+    "engine": "deterministic-statistics-v1",
+    "operations": [
+      "descriptive"
+    ],
+    "analysis_profile": null,
+    "confidence_level": 0.95,
+    "sample_size": 1,
+    "columns_analyzed": [
+      "waste_revenue",
+      "waste_operating_margin_pct",
+      "region"
+    ],
+    "descriptive": {
+      "waste_revenue": {
+        "count": 1,
+        "null_count": 0,
+        "sum": 51474889.9,
+        "mean": 51474889.9,
+        "median": 51474889.9,
+        "stddev": 0.0,
+        "variance": 0.0,
+        "min": 51474889.9,
+        "max": 51474889.9,
+        "q1": 51474889.9,
+        "q3": 51474889.9,
+        "iqr": 0.0,
+        "coefficient_of_variation_pct": 0.0,
+        "standard_error": 0.0,
+        "mean_confidence_interval": [
+          51474889.9,
+          51474889.9
+        ]
+      },
+      "waste_operating_margin_pct": {
+        "count": 1,
+        "null_count": 0,
+        "sum": 33.826410029873614,
+        "mean": 33.826410029873614,
+        "median": 33.826410029873614,
+        "stddev": 0.0,
+        "variance": 0.0,
+        "min": 33.826410029873614,
+        "max": 33.826410029873614,
+        "q1": 33.826410029873614,
+        "q3": 33.826410029873614,
+        "iqr": 0.0,
+        "coefficient_of_variation_pct": 0.0,
+        "standard_error": 0.0,
+        "mean_confidence_interval": [
+          33.826410029873614,
+          33.826410029873614
+        ]
+      }
+    },
+    "aggregates": {
+      "waste_revenue": {
+        "value": 51474889.9,
+        "method": "sum",
+        "additivity": "additive",
+        "observations": 1
+      },
+      "waste_operating_margin_pct": {
+        "value": 33.826410029873614,
+        "method": "mean_across_returned_buckets",
+        "additivity": "non_additive",
+        "observations": 1
+      }
+    },
+    "tests": {},
+    "anomalies": {},
+    "provenance": {
+      "source_rows": 1,
+      "executed_sql_sha256": "dd0b92669eb70f3a054d3aacffa37d0a0fcb3d4ad565e14ab1799c8f208ed74b",
+      "result_sha256": "5933fe08cc995715ba8c8a66dd1004a5b1f63459ffb8201fc37101abc9947ab3",
+      "database_dialect": "sqlite",
+      "is_truncated": false,
+      "deterministic": true
+    },
+    "methods": [
+      "sample descriptive statistics and t confidence interval"
+    ],
+    "assumptions": [
+      "Statistics use only rows returned by the validated read-only query.",
+      "Missing numeric values are excluded per statistic and reported as null counts."
+    ],
+    "limitations": [
+      "Fewer than three observations limit inferential and variability analysis."
+    ],
+    "breakdown": {
+      "dimensions": [
+        "region"
+      ],
+      "population_observations": 1,
+      "rows": [
+        {
+          "region": "West",
+          "waste_revenue": 51474889.9,
+          "waste_operating_margin_pct": 33.826410029873614
+        }
+      ]
+    }
+  },
+  "error": null,
+  "question_type": "follow_up_extend",
+  "complexity_tier": "very_complex",
+  "investigation_steps": null,
+  "evidence_nodes": [],
+  "tables_used": [
+    "wm_finance_monthly",
+    "wm_contracts",
+    "wm_customers"
+  ],
+  "critic_score": 1.0,
+  "pipeline_duration_ms": 17417.358100006822,
+  "context_snapshot": {
+    "current_measures": [
+      "waste_revenue",
+      "waste_operating_margin_pct"
+    ],
+    "current_dimensions": [
+      "region"
+    ],
+    "accumulated_filters": [
+      "West waste region"
+    ],
+    "current_time_range": "2026-01-01 to 2026-12-31",
+    "current_tables": [
+      "wm_finance_monthly",
+      "wm_contracts",
+      "wm_customers"
+    ]
+  }
+}

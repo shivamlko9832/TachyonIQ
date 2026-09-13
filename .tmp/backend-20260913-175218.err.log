@@ -1,0 +1,14 @@
+INFO:     Started server process [20412]
+INFO:     Waiting for application startup.
+Overriding of current TracerProvider is not allowed
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 2320.01it/s]
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8123 (Press CTRL+C to quit)
+Transient error HTTPConnectionPool(host='localhost', port=3000): Max retries exceeded with url: /api/public/otel/v1/traces (Caused by NewConnectionError("HTTPConnection(host='localhost', port=3000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it")) encountered while exporting span batch, retrying in 1.00s.
+Failed to export span batch due to timeout, max retries or shutdown.
+Transient error HTTPConnectionPool(host='localhost', port=3000): Max retries exceeded with url: /api/public/otel/v1/traces (Caused by NewConnectionError("HTTPConnection(host='localhost', port=3000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it")) encountered while exporting span batch, retrying in 0.99s.
+Failed to export span batch due to timeout, max retries or shutdown.
+{"timestamp": "2026-09-13T12:23:40.602463+00:00", "user_id": "dev", "session_id": "cf24f57a-ebc6-4483-9660-4287bcebbb1f", "turn_id": 0, "question": "What was our revenue and operating margin in 2026?", "question_type": "aggregation", "tables_used": ["wm_finance_monthly"], "sql_hash": "b5183b0d52103130", "row_count": 1, "is_truncated": false, "pipeline_duration_ms": 11050.87, "is_success": true, "error_type": null, "error_stage": null}
+Transient error HTTPConnectionPool(host='localhost', port=3000): Max retries exceeded with url: /api/public/otel/v1/traces (Caused by NewConnectionError("HTTPConnection(host='localhost', port=3000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it")) encountered while exporting span batch, retrying in 0.88s.
+Failed to export span batch due to timeout, max retries or shutdown.
