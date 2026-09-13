@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from uada.config import Settings
 from uada.db.adapter import SQLAlchemyAdapter
+from uada.models.conversation import TurnStatus
 from uada.pipeline.conversation_store import ConversationStore
 from uada.pipeline.intent_extractor import IntentExtractor
 from uada.pipeline.orchestrator import PipelineOrchestrator
@@ -204,6 +205,32 @@ def _intent_test_model() -> TestModel:
 
 
 class TestSuccessfulRun:
+    async def test_greeting_bypasses_analytical_pipeline_and_preserves_context(
+        self,
+        orchestrator: OrchestratorFixture,
+    ) -> None:
+        pipeline, _intent_extractor, _sql_generator, adapter, store = orchestrator
+        call_count = 0
+        original_execute = adapter.execute_query
+
+        def spy(*args: object, **kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            return original_execute(*args, **kwargs)  # type: ignore[arg-type]
+
+        adapter.execute_query = spy  # type: ignore[method-assign]
+        response = await pipeline.run("Hi TachyonIQ!", "session-greeting")
+        state = await store.load("session-greeting")
+
+        assert response.is_success is True
+        assert response.question_type == "conversation"
+        assert response.answer is not None and response.answer.startswith("Hello!")
+        assert response.sql is None
+        assert call_count == 0
+        assert state.turns[-1].status == TurnStatus.CONVERSATIONAL
+        assert state.last_successful_turn is None
+        assert state.get_edition_context() == "No prior context."
+
     async def test_full_pipeline_succeeds(
         self,
         orchestrator: OrchestratorFixture,

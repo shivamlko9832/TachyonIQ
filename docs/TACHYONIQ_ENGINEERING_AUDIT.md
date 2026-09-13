@@ -103,8 +103,17 @@ Each result carries a SHA-256 fingerprint over the exact columns and rows, plus 
 hash of the executed SQL. Changing a returned value changes the fingerprint. The
 demo ground-truth runner independently checks table counts, scalar proofs, effect
 sizes, correlations, the Europe decline and the APAC anomaly. The current unit suite
-passes 496 tests, the integration suite passes 64 tests, and the deterministic demo
+passes 502 tests, the integration suite passes 65 tests, and the deterministic demo
 acceptance report passes.
+
+The greeting and scalar-answer acceptance defect is also closed. Complete social
+utterances such as `Hi`, `Thank you`, and `What can you do?` now bypass schema
+retrieval and SQL while remaining outside the analytical follow-up context. A
+greeting-prefixed business question still traverses the full governed pipeline.
+Single-row scalar aggregates are narrated from the deterministic statistical report,
+formatted with the semantic metric unit, and rendered as KPI cards even when intent
+extraction retains a redundant time dimension. The UI suppresses SQL evidence and
+save controls for conversational replies because no analytical query ran.
 
 The executive-summary failure shown during acceptance was traced to the planner's
 table-reference lexer. It interpreted the decimal literal `100.0` in a governed

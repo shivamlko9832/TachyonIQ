@@ -28,6 +28,10 @@ class ColumnMeta(BaseModel):
     name: str
     data_type: str  # Python type name: "int", "float", "str", "datetime", "date", "bool"
     nullable: bool = True
+    unit: str | None = Field(
+        default=None,
+        description="Semantic display unit inherited from the governed metric definition.",
+    )
 
 
 class QueryResult(BaseModel):

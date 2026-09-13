@@ -348,6 +348,24 @@ class StatisticalEngine:
                     f"a {self._format_number(first.get('change_pct'))}% change from "
                     f"{self._format_number(first.get('comparison'))}."
                 )
+
+        # A scalar aggregate is already a complete analytical result. Narrate
+        # the exact governed value instead of falling through to "Found 1 row."
+        # This branch reads only the deterministic report produced from the
+        # validated query result; it contains no demo-specific values.
+        if report.get("sample_size") == 1 and len(plan.measures) == 1 and not plan.dimensions:
+            measure = plan.measures[0]
+            aggregate = report.get("aggregates", {}).get(measure.output_alias)
+            if isinstance(aggregate, dict) and aggregate.get("value") is not None:
+                label = measure.name.removeprefix("scorecard_").replace("_", " ")
+                scope = self._time_scope_label(intent)
+                value = self._format_measure_value(aggregate["value"], measure.unit)
+                scope_text = f" for {scope}" if scope else ""
+                return (
+                    f"{label.capitalize()}{scope_text} is {value}. "
+                    "It was calculated from the governed metric definition and the "
+                    "validated aggregate result."
+                )
         return None
 
     @staticmethod
@@ -726,6 +744,36 @@ class StatisticalEngine:
         if abs(number) >= 100:
             return f"{number:,.1f}"
         return f"{number:,.2f}"
+
+    @staticmethod
+    def _format_measure_value(value: Any, unit: str | None) -> str:
+        """Format a scalar using semantic metadata carried by the query plan."""
+        number = float(value)
+        normalised_unit = (unit or "").strip().upper()
+        if normalised_unit in {"USD", "$"}:
+            return f"${number:,.2f}"
+        if normalised_unit in {"EUR", "€"}:
+            return f"€{number:,.2f}"
+        if normalised_unit in {"GBP", "£"}:
+            return f"£{number:,.2f}"
+        if normalised_unit in {"PERCENT", "PERCENTAGE", "%"}:
+            return f"{number:,.2f}%"
+        suffix = f" {unit}" if unit else ""
+        return f"{number:,.2f}{suffix}"
+
+    @staticmethod
+    def _time_scope_label(intent: AnalyticalIntent) -> str | None:
+        time_range = intent.time_range
+        if time_range is None:
+            return None
+        if time_range.relative_period is not None:
+            label = time_range.relative_period.value.replace("_", " ")
+            if time_range.period_count is not None:
+                label = label.replace("n", str(time_range.period_count), 1)
+            return label
+        if time_range.start_date and time_range.end_date:
+            return f"{time_range.start_date} through {time_range.end_date}"
+        return None
 
     @staticmethod
     def _correlation_strength(value: float) -> str:

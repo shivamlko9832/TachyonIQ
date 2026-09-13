@@ -77,6 +77,46 @@ class TestDeterministicSelection:
         assert viz.value == 500.0
         assert "revenue" in viz.label.lower()
 
+    async def test_scalar_result_remains_kpi_when_intent_retains_time_dimension(
+        self, generator: VisualisationGenerator, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            [ColumnMeta(name="scorecard_revenue", data_type="float")],
+            [[9_698_813.69]],
+        )
+        intent = AnalyticalIntent(
+            question_type=QuestionType.FILTER,
+            measures=["scorecard_revenue"],
+            dimensions=["month"],
+            raw_question="Tell me revenue generated for this month",
+        )
+        analysed = analyser.analyse(result, intent)
+
+        viz = await generator.generate(analysed, intent)
+
+        assert isinstance(viz, KpiSpec)
+        assert viz.value == 9_698_813.69
+
+    async def test_kpi_uses_governed_currency_unit(
+        self, generator: VisualisationGenerator, analyser: ResultAnalyser
+    ) -> None:
+        result = _result(
+            [ColumnMeta(name="scorecard_revenue", data_type="float", unit="USD")],
+            [[9_698_813.69]],
+        )
+        intent = AnalyticalIntent(
+            question_type=QuestionType.AGGREGATION,
+            measures=["scorecard_revenue"],
+            raw_question="Revenue this month",
+        )
+        analysed = analyser.analyse(result, intent)
+
+        viz = await generator.generate(analysed, intent)
+
+        assert isinstance(viz, KpiSpec)
+        assert viz.formatted_value == "$9.7M"
+        assert viz.unit == "USD"
+
     async def test_time_series_produces_line_chart(
         self, generator: VisualisationGenerator, analyser: ResultAnalyser
     ) -> None:

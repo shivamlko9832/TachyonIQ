@@ -906,7 +906,7 @@ function renderDataQuality(dq) {
 }
 
 function renderEvidence(response) {
-  if (!response || response.error) return '';
+  if (!response || response.error || response.question_type === 'conversation') return '';
   const tables = (response.tables_used || []).map(escapeHtml).join(', ') || '—';
   const rows = response.row_count == null ? '—' : Number(response.row_count).toLocaleString();
   const execution = response.execution_time_ms == null
@@ -927,6 +927,7 @@ function renderEvidence(response) {
 
 function renderEvidenceDrawer(response) {
   if (!response || response.error) return '<div class="empty-state">Evidence will appear after a validated query</div>';
+  if (response.question_type === 'conversation') return '<div class="empty-state">No data query was needed for this conversational reply.</div>';
   const ex = response.explainability || {};
   const tables = (response.tables_used || ex.tables_referenced || []).map(escapeHtml).join(', ') || '—';
   const filters = (ex.filters_applied || []).map(escapeHtml).join('<br>') || 'No additional filters';
@@ -957,6 +958,7 @@ function renderEvidenceDrawer(response) {
 
 function renderInsightsDrawer(response) {
   if (!response || response.error) return '<div class="empty-state">Run an analysis to see executive insights</div>';
+  if (response.question_type === 'conversation') return '<div class="empty-state">Ask a business question to see evidence-backed insights.</div>';
   const ins = response.generated_insights || {};
   const findings = [...new Set([...(ins.key_findings || []), ...(response.key_findings_bullets || [])])];
   const drivers = [...new Set([...(ins.drivers || []), ...(response.drivers || [])])];
@@ -1034,6 +1036,7 @@ function renderInvestigation(response) {
 }
 
 function updateActiveContext(response) {
+  if (response?.question_type === 'conversation') return;
   const ex = response?.explainability || {};
   const snapshot = response?.context_snapshot || {};
   const measures = snapshot.current_measures || [];
@@ -1224,16 +1227,24 @@ async function sendQuestion(question) {
 
     // SQL panel
     state.lastSql = d.sql || '';
-    $('sql-block').innerHTML = d.sql ? highlightSql(d.sql) : 'No SQL returned.';
+    $('sql-block').innerHTML = d.sql
+      ? highlightSql(d.sql)
+      : (d.question_type === 'conversation' ? 'No data query was needed.' : 'No SQL returned.');
 
     // Data panel
     state.lastData = d.query_result || null;
     if (d.query_result) renderDataTable(d.query_result);
-    else $('data-table-wrap').innerHTML = '<div class="empty-state">No result rows returned.</div>';
+    else $('data-table-wrap').innerHTML = d.question_type === 'conversation'
+      ? '<div class="empty-state">Ask a business question to return validated rows.</div>'
+      : '<div class="empty-state">No result rows returned.</div>';
 
     // Build AI message
     let html = '<div class="msg-bubble">';
-    html += `<div class="answer-head"><span class="answer-type">${escapeHtml(d.question_type || 'validated analysis')}</span><button class="save-analysis-btn" onclick="saveCurrentAnalysis()">Save analysis</button></div>`;
+    const answerType = d.question_type === 'conversation' ? 'assistant' : (d.question_type || 'validated analysis');
+    const saveButton = d.question_type === 'conversation'
+      ? ''
+      : '<button class="save-analysis-btn" onclick="saveCurrentAnalysis()">Save analysis</button>';
+    html += `<div class="answer-head"><span class="answer-type">${escapeHtml(answerType)}</span>${saveButton}</div>`;
     if (d.answer) html += `<div class="msg-answer">${escapeHtml(d.answer)}</div>`;
     if (d.key_finding) html += `<div class="msg-finding">💡 ${escapeHtml(d.key_finding)}</div>`;
 

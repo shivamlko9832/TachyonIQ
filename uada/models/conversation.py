@@ -24,6 +24,7 @@ from uada.models.intent import AnalyticalIntent
 
 class TurnStatus(str, Enum):
     SUCCESS = "success"
+    CONVERSATIONAL = "conversational"
     ERROR = "error"
     CLARIFICATION_REQUESTED = "clarification_requested"
     SECURITY_REJECTED = "security_rejected"

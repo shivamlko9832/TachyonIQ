@@ -73,8 +73,13 @@ _UNDETERMINED = _Undetermined()
 
 def _format_kpi_value(value: float | int, unit: str | None = None) -> str:
     """Format a numeric KPI value for display (e.g. 2400000 → '$2.4M')."""
-    prefix = unit if unit and unit in ("$", "€", "£", "¥") else ""
-    suffix = unit if unit and unit not in ("$", "€", "£", "¥") else ""
+    currency_symbols = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"}
+    normalised_unit = (unit or "").upper()
+    prefix = currency_symbols.get(
+        normalised_unit,
+        unit if unit in ("$", "€", "£", "¥") else "",
+    )
+    suffix = "" if prefix else (unit or "")
     abs_val = abs(float(value))
     if abs_val >= 1_000_000_000:
         formatted = f"{prefix}{value / 1_000_000_000:.1f}B{suffix}"
@@ -163,7 +168,11 @@ class VisualisationGenerator:
                 return VisualisationFallback(reason="KPI value is null.")
 
             value = float(raw_value)
-            formatted = _format_kpi_value(value)
+            column_meta = next(
+                (item for item in result.query_result.columns if item.name == col), None
+            )
+            unit = column_meta.unit if column_meta is not None else None
+            formatted = _format_kpi_value(value, unit)
 
             # Trend from conversation context if available
             trend_direction: str | None = None
@@ -182,6 +191,7 @@ class VisualisationGenerator:
                 value=value,
                 label=col.replace("_", " ").title(),
                 formatted_value=formatted,
+                unit=unit,
                 trend_direction=trend_direction,
                 trend_pct=trend_pct,
             )
@@ -197,7 +207,10 @@ class VisualisationGenerator:
         row_count = result.query_result.row_count
         numeric_column_count = len(result.numeric_summaries)
 
-        if row_count <= 1 and numeric_column_count <= 1 and not intent.dimensions:
+        # Trust the executed result shape. Intent extraction can retain a time
+        # dimension for phrases such as "this month" even when the governed SQL
+        # correctly returns one scalar aggregate.
+        if row_count <= 1 and numeric_column_count <= 1:
             return ChartType.KPI
         if intent.question_type == QuestionType.TIME_SERIES:
             return ChartType.LINE

@@ -16,7 +16,10 @@ from uada.models.intent import (
     RelativePeriod,
     SemanticFilter,
     SortDirection,
+    TimeBucket,
     TimeComparison,
+    TimeRange,
+    TimeRangeType,
 )
 from uada.models.result import AnalysedResult, ColumnMeta, QueryResult
 from uada.models.schema_context import ColumnContext, SchemaContext, TableContext
@@ -287,6 +290,46 @@ def test_response_shortcut_builders_are_absent() -> None:
         "_is_executive_summary_question",
     }
     assert not forbidden.intersection(source.split())
+
+
+def test_scalar_metric_narrative_uses_governed_result_and_semantic_unit(
+    manager: SCLManager,
+) -> None:
+    question = "Tell me about the revenue generated for this month."
+    intent = AnalyticalIntent(
+        question_type=QuestionType.AGGREGATION,
+        measures=["scorecard_revenue"],
+        time_dimension="month",
+        time_range=TimeRange(
+            range_type=TimeRangeType.RELATIVE,
+            relative_period=RelativePeriod.THIS_MONTH,
+            bucket=TimeBucket.MONTH,
+        ),
+        raw_question=question,
+    )
+    plan = QueryPlanner(manager, strict_semantics=True).plan(intent, _context())
+    query_result = QueryResult(
+        columns=[ColumnMeta(name="scorecard_revenue", data_type="float")],
+        rows=[[9_698_813.69]],
+        row_count=1,
+        executed_sql=(
+            "SELECT SUM(business_kpi_monthly.net_revenue) AS scorecard_revenue "
+            "FROM business_kpi_monthly"
+        ),
+        execution_time_ms=1.0,
+        database_dialect="sqlite",
+    )
+    analysed = AnalysedResult(query_result=query_result)
+    engine = StatisticalEngine()
+    report = engine.analyse(analysed, intent, plan)
+
+    narrative = engine.narrative(report, intent, plan)
+
+    assert narrative == (
+        "Revenue for this month is $9,698,813.69. It was calculated from the governed "
+        "metric definition and the validated aggregate result."
+    )
+    assert report["aggregates"]["scorecard_revenue"]["value"] == 9_698_813.69
 
 
 def test_explicit_comparison_replaces_model_time_noise() -> None:

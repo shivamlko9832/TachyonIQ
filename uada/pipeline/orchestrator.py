@@ -48,6 +48,7 @@ from uada.models.result import (
     UADAResponse,
     VegaLiteSpec,
 )
+from uada.pipeline.conversational_router import ConversationalRouter
 from uada.pipeline.intent_normalizer import IntentNormalizer
 
 if TYPE_CHECKING:
@@ -187,6 +188,33 @@ class PipelineOrchestrator:
         turn_id = state.turn_count
         stage = PipelineStage.SCHEMA_LINKING
         intent: AnalyticalIntent | None = None
+
+        conversational_reply = ConversationalRouter.route(question)
+        if conversational_reply is not None:
+            response = UADAResponse(
+                session_id=session_id,
+                turn_id=turn_id,
+                timestamp=datetime.now(tz=UTC),
+                answer=conversational_reply.answer,
+                suggested_questions=list(conversational_reply.suggested_questions),
+                question_type="conversation",
+                pipeline_duration_ms=(time.perf_counter() - start_time) * 1000,
+            )
+            turn = ConversationTurn(
+                turn_id=turn_id,
+                timestamp=datetime.now(tz=UTC),
+                user_question=question,
+                status=TurnStatus.CONVERSATIONAL,
+                result_summary=conversational_reply.answer,
+            )
+            return await self._save_and_return(
+                state,
+                turn,
+                None,
+                response,
+                question=question,
+                user_id=user_id,
+            )
 
         try:
             with _tracer.start_as_current_span("schema_linking") as span:
@@ -868,8 +896,9 @@ class PipelineOrchestrator:
     def _to_query_result(
         self, raw_result: QueryExecutionResult, sql: str, plan: QueryPlan
     ) -> QueryResult:
+        measure_units = {measure.output_alias: measure.unit for measure in plan.measures}
         columns = [
-            ColumnMeta(name=name, data_type=data_type)
+            ColumnMeta(name=name, data_type=data_type, unit=measure_units.get(name))
             for name, data_type in zip(
                 raw_result.column_names, raw_result.column_types, strict=True
             )
